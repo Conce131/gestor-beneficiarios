@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Permisos básicos de la ventana principal",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file", "fs:allow-write-file", "opener:allow-open-path", "store:allow-load", "store:allow-get", "store:allow-set", "store:allow-save"]
+}

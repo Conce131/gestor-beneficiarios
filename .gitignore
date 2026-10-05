@@ -1,0 +1,22 @@
+node_modules/
+dist/
+*.log
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Paquetes y datos locales de prueba; se generan para cada prueba de instalación.
+/GestorBeneficiarios-1.0.0-Windows-setup.exe
+/GestorBeneficiarios-instalador-Windows.zip
+/GestorBeneficiarios-prueba-Windows-x64.zip
+/INSTRUCCIONES-PRUEBA-WINDOWS.txt
+/listado-prueba-100-personas.xlsx
+/src-tauri/*.xlsx
+
+# Iconos generados para plataformas y tamaños que esta compilación no usa.
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+/src-tauri/icons/64x64.png
+/src-tauri/icons/128x128@2x.png
+/src-tauri/icons/Square*.png
+/src-tauri/icons/StoreLogo.png
+/src-tauri/icons/icon.png

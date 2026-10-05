@@ -1,0 +1,112 @@
+import { unzipSync, strFromU8 } from "fflate";
+
+const NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const PKG_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+function parse(bytes) {
+  const doc = new DOMParser().parseFromString(strFromU8(bytes), "application/xml");
+  if (doc.getElementsByTagName("parsererror").length) throw new Error("El Excel está dañado o no tiene un formato compatible.");
+  return doc;
+}
+
+function columnIndex(reference) {
+  const letters = /^([A-Z]+)/.exec(reference)?.[1];
+  if (!letters) return -1;
+  return [...letters].reduce((sum, letter) => sum * 26 + letter.charCodeAt(0) - 64, 0) - 1;
+}
+
+function serialDate(value) {
+  const serial = Number(value);
+  if (!Number.isFinite(serial) || serial <= 0 || serial > 2958465) return "";
+  // Excel incluye el inexistente 29/02/1900 en su calendario histórico.
+  const epoch = serial >= 60 ? Date.UTC(1899, 11, 30) : Date.UTC(1899, 11, 31);
+  const date = new Date(epoch + Math.floor(serial) * 86400000);
+  return date.toISOString().slice(0, 10);
+}
+
+function cellValue(cell, sharedStrings) {
+  const type = cell.getAttribute("t");
+  if (type === "inlineStr") return cell.getElementsByTagNameNS(NS, "t").item(0)?.textContent ?? "";
+  const raw = cell.getElementsByTagNameNS(NS, "v").item(0)?.textContent ?? "";
+  if (type === "s") return sharedStrings[Number(raw)] ?? "";
+  if (type === "str" || type === "e") return raw;
+  return raw;
+}
+
+export function importWorkbook(bytes) {
+  let files;
+  try { files = unzipSync(new Uint8Array(bytes)); }
+  catch { throw new Error("No se pudo abrir el Excel. Selecciona un archivo .xlsx válido."); }
+  const workbookBytes = files["xl/workbook.xml"];
+  const relBytes = files["xl/_rels/workbook.xml.rels"];
+  if (!workbookBytes || !relBytes) throw new Error("Selecciona un Excel compatible con la plantilla oficial.");
+  const workbook = parse(workbookBytes);
+  const relationships = parse(relBytes);
+  const sheet = Array.from(workbook.getElementsByTagNameNS(NS, "sheet"))
+    .find(item => item.getAttribute("name") === "Listado");
+  if (!sheet) throw new Error("El Excel no contiene una hoja llamada Listado.");
+  const relId = sheet.getAttributeNS(REL_NS, "id");
+  const relation = Array.from(relationships.getElementsByTagNameNS(PKG_NS, "Relationship"))
+    .find(item => item.getAttribute("Id") === relId);
+  if (!relation || relation.getAttribute("Target").startsWith("/")) throw new Error("La hoja Listado no tiene una ruta válida.");
+  const target = relation.getAttribute("Target");
+  const sheetPath = target.startsWith("xl/") ? target : `xl/${target.replace(/^\.\//, "")}`;
+  if (!files[sheetPath]) throw new Error("No se pudo leer la hoja Listado.");
+  const sharedDoc = files["xl/sharedStrings.xml"] ? parse(files["xl/sharedStrings.xml"]) : null;
+  const sharedStrings = sharedDoc
+    ? Array.from(sharedDoc.getElementsByTagNameNS(NS, "si"), item => Array.from(item.getElementsByTagNameNS(NS, "t"), t => t.textContent).join(""))
+    : [];
+  const doc = parse(files[sheetPath]);
+  const rows = Array.from(doc.getElementsByTagNameNS(NS, "row"));
+  const header = rows.find(row => row.getAttribute("r") === "1");
+  const headerCells = new Map(Array.from(header?.getElementsByTagNameNS(NS, "c") ?? [], cell => [cell.getAttribute("r").replace(/\d+$/, ""), cellValue(cell, sharedStrings).trim().toLowerCase()]));
+  const expected = { A: "n.º de familias", B: "n.º de beneficiarios/as", C: "nombre", D: "apellidos", E: "documento" };
+  if (Object.entries(expected).some(([column, label]) => headerCells.get(column) !== label)) {
+    throw new Error("Las columnas no coinciden con la plantilla oficial. No se ha importado ningún dato.");
+  }
+
+  const families = [];
+  let current = null;
+  const seenNumbers = new Set();
+  for (const row of rows) {
+    const rowNumber = Number(row.getAttribute("r"));
+    if (rowNumber < 2) continue;
+    const values = new Map(Array.from(row.getElementsByTagNameNS(NS, "c"), cell => [columnIndex(cell.getAttribute("r")), cellValue(cell, sharedStrings)]));
+    const numberValue = values.get(0)?.trim();
+    const hasData = [1, 2, 3, 4, 5, 7, 8, 11].some(index => values.get(index)?.trim());
+    if (!hasData) continue;
+    if (numberValue) {
+      const number = Number(numberValue);
+      if (!Number.isSafeInteger(number) || number < 1 || seenNumbers.has(number)) {
+        throw new Error(`El número de familia en la fila ${rowNumber} no es válido o está repetido.`);
+      }
+      current = { id: crypto.randomUUID(), numero: number, personas: [] };
+      families.push(current);
+      seenNumbers.add(number);
+    } else if (!current) {
+      throw new Error(`Hay un beneficiario sin número de familia en la fila ${rowNumber}.`);
+    }
+    const birth = values.get(5)?.trim() ?? "";
+    const referral = values.get(7)?.trim() ?? "";
+    const expiry = values.get(8)?.trim() ?? "";
+    const appointment = values.get(11)?.trim() ?? "";
+    const person = {
+      id: crypto.randomUUID(),
+      titular: current.personas.length === 0,
+      nombre: values.get(2)?.trim() ?? "",
+      apellidos: values.get(3)?.trim() ?? "",
+      documento: values.get(4)?.trim() ?? "",
+      nacimiento: birth ? serialDate(birth) : "",
+      derivacion: referral ? serialDate(referral) : "",
+      vigencia: expiry ? serialDate(expiry) : "",
+      proximaCita: appointment ? serialDate(appointment) : "",
+    };
+    if ([birth, referral, expiry, appointment].some(value => value && !serialDate(value))) {
+      throw new Error(`La fecha de la fila ${rowNumber} no es válida.`);
+    }
+    current.personas.push(person);
+  }
+  if (!families.length) throw new Error("No se encontraron beneficiarios en la hoja Listado.");
+  return families;
+}

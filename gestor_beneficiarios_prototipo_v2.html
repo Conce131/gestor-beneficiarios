@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gestor de beneficiarios</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f3f5f7;color:#202428}
+header{background:#245b7a;color:white;padding:18px 24px}header h1{margin:0 0 5px;font-size:24px}header p{margin:0;font-size:14px}
+main{max-width:1180px;margin:22px auto;padding:0 16px 45px}.card{background:white;border-radius:10px;padding:20px;margin-bottom:18px;box-shadow:0 1px 5px #00000012}
+.toolbar{display:flex;gap:9px;flex-wrap:wrap}.search{flex:1;min-width:260px;padding:11px;border:1px solid #b9c3ca;border-radius:7px;font-size:15px}
+button{border:0;border-radius:7px;padding:10px 14px;font-size:14px;cursor:pointer}.primary{background:#245b7a;color:white}.secondary{background:#e8edf0}.danger{background:#f5d6d6;color:#8b2222}.success{background:#dcefe1;color:#205c30}
+.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.stat{background:#edf3f6;border-radius:8px;padding:13px;text-align:center}.stat strong{display:block;font-size:24px}
+.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{padding:11px 9px;border-bottom:1px solid #e0e4e7;text-align:left;white-space:nowrap}th{background:#edf3f6;font-size:13px}
+tr.click{cursor:pointer}tr.click:hover{background:#f5fafc}.badge{padding:5px 8px;border-radius:15px;font-size:12px;font-weight:bold}.ok{background:#dff1e4;color:#246438}.warn{background:#fff0c7;color:#815c00}.expired{background:#f7d9d9;color:#8b2222}.appointment{background:#e1e7f8;color:#354b91}
+.form-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.person{border:1px solid #d8dde1;background:#fafbfc;border-radius:8px;padding:16px;margin:13px 0}.person-head{display:flex;justify-content:space-between;align-items:center}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+label{display:block;font-weight:bold;font-size:13px;margin-bottom:5px}input{width:100%;padding:10px;border:1px solid #b9c3ca;border-radius:6px;font-size:15px}input:focus{outline:2px solid #9bc7df}
+small{display:block;margin-top:5px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}.notice{padding:12px;background:#fff4d6;border-left:4px solid #dda800;border-radius:4px;margin-top:12px}.save{font-size:13px;color:#47705a}.empty{text-align:center;color:#666;padding:25px}
+.filebox{border:1px dashed #9aa8b1;padding:14px;border-radius:8px;margin-top:12px}.hidden{display:none}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,1fr)}.summary{grid-template-columns:repeat(2,1fr)}}@media(max-width:520px){.grid{grid-template-columns:1fr}.summary{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header><h1>Gestor de beneficiarios</h1><p>Aplicación local · prototipo de trabajo</p></header>
+<main id="app"></main>
+
+<script>
+/*
+  PROTOTIPO v2
+  - IndexedDB para almacenamiento local
+  - Copia/restauración JSON
+  - Tabla de familias + formulario individual
+  - Exportación XLSX real si se abre con internet (SheetJS desde CDN)
+  - La exportación usa una estructura equivalente a la plantilla.
+  - Para producción: sustituir buildWorkbook() por la escritura directa sobre la plantilla v1.4.
+*/
+
+const DB_NAME="GestorBeneficiariosDB", DB_VERSION=1, STORE="familias";
+let familias=[], siguienteFamilia=1, vista="listado", editando=null;
+
+function openDB(){
+ return new Promise((resolve,reject)=>{
+  const r=indexedDB.open(DB_NAME,DB_VERSION);
+  r.onupgradeneeded=()=>r.result.createObjectStore(STORE,{keyPath:"id"});
+  r.onsuccess=()=>resolve(r.result); r.onerror=()=>reject(r.error);
+ });
+}
+async function saveDB(){
+ const db=await openDB(), tx=db.transaction(STORE,"readwrite"), st=tx.objectStore(STORE);
+ st.clear();
+ familias.forEach(f=>st.put(f));
+ return new Promise((res,rej)=>{tx.oncomplete=res;tx.onerror=()=>rej(tx.error)});
+}
+async function loadDB(){
+ const db=await openDB();
+ return new Promise((resolve,reject)=>{
+  const r=db.transaction(STORE).objectStore(STORE).getAll();
+  r.onsuccess=()=>resolve(r.result||[]);r.onerror=()=>reject(r.error);
+ });
+}
+function persona(){return{id:crypto.randomUUID(),nombre:"",apellidos:"",documento:"",nacimiento:"",derivacion:"",vigencia:"",proximaCita:""}}
+function familia(){return{id:crypto.randomUUID(),numero:siguienteFamilia++,personas:[persona()]}}
+function renumerar(){familias.sort((a,b)=>a.numero-b.numero); familias.forEach((f,i)=>f.numero=i+1); siguienteFamilia=familias.length+1}
+function edad(d){if(!d)return"";let h=new Date(),n=new Date(d+"T00:00:00"),e=h.getFullYear()-n.getFullYear(),m=h.getMonth()-n.getMonth();if(m<0||(m===0&&h.getDate()<n.getDate()))e--;return e>=0?e:""}
+function caducada(d){return d && new Date(d+"T23:59:59")<new Date()}
+function esc(s){return String(s??"").replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;").replaceAll(">","&gt;")}
+function fmt(d){return d?d.split("-").reverse().join("/"):"—"}
+function estado(f){
+ const ps=f.personas, cad=ps.some(p=>caducada(p.vigencia)), cita=ps.some(p=>p.proximaCita);
+ if(cad&&cita)return["appointment","📅 Cita pendiente"];
+ if(cad)return["expired","🔴 Caducada"];
+ if(ps.some(p=>p.vigencia&&(new Date(p.vigencia)-new Date())<1000*60*60*24*60))return["warn","🟡 Próxima"];
+ return["ok","🟢 Correcta"]
+}
+async function changed(){await saveDB();document.getElementById("saveState")?.replaceChildren(document.createTextNode("💾 Guardado automáticamente"))}
+function render(){vista==="listado"?renderListado():renderFormulario()}
+function renderListado(){
+ document.getElementById("app").innerHTML=`
+ <div class="card"><div class="toolbar">
+ <input id="search" class="search" placeholder="🔎 Buscar familia, nombre, apellidos o documento..." oninput="filterTable()">
+ <button class="primary" onclick="newFamily()">+ Nueva familia</button>
+ </div></div>
+ <div class="summary">
+ <div class="stat"><strong>${familias.length}</strong>Familias</div>
+ <div class="stat"><strong>${familias.reduce((n,f)=>n+f.personas.length,0)}</strong>Beneficiarios</div>
+ <div class="stat"><strong>${familias.filter(f=>f.personas.some(p=>caducada(p.vigencia))).length}</strong>Caducadas</div>
+ <div class="stat"><strong>${familias.filter(f=>f.personas.some(p=>p.proximaCita)).length}</strong>Con próxima cita</div>
+ </div>
+ <div class="card"><div class="table-wrap"><table><thead><tr><th>N.º</th><th>Familia</th><th>Miembros</th><th>Vigencia más próxima</th><th>Próxima cita</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div><p id="counter" style="font-size:13px;color:#666"></p></div>
+ <div class="card">
+ <h2 style="margin-top:0">Datos y copias de seguridad</h2>
+ <div class="actions">
+ <button class="success" onclick="backup()">💾 Guardar copia de seguridad</button>
+ <button class="secondary" onclick="document.getElementById('restore').click()">📂 Restaurar copia</button>
+ <input id="restore" class="hidden" type="file" accept=".json" onchange="restoreFile(event)">
+ <button class="primary" onclick="exportExcel()">📊 Generar Excel</button>
+ </div>
+ <div id="saveState" class="save">💾 Los datos se guardan automáticamente en este equipo.</div>
+ <div class="notice"><strong>Importante:</strong> la copia de seguridad es recomendable antes de cambiar de ordenador o navegador. El Excel generado sigue siendo la copia de trabajo principal.</div>
+ </div>`;
+ filterTable();
+}
+function filterTable(){
+ const q=(document.getElementById("search")?.value||"").toLowerCase().trim();
+ const list=familias.filter(f=>!q||String(f.numero).includes(q)||f.personas.some(p=>(p.nombre+" "+p.apellidos+" "+p.documento).toLowerCase().includes(q)));
+ document.getElementById("rows").innerHTML=list.length?list.map(f=>{
+  const names=f.personas.map(p=>(esc(p.nombre)+" "+esc(p.apellidos)).trim()).filter(Boolean).join(", ")||"Sin datos";
+  const vig=f.personas.map(p=>p.vigencia).filter(Boolean).sort()[0], cita=f.personas.map(p=>p.proximaCita).filter(Boolean).sort()[0], [cl,tx]=estado(f);
+  return `<tr class="click" onclick="openFamily('${f.id}')"><td><b>${f.numero}</b></td><td>${names}</td><td>${f.personas.length}</td><td>${fmt(vig)}</td><td>${fmt(cita)}</td><td><span class="badge ${cl}">${tx}</span></td><td><button class="secondary" onclick="event.stopPropagation();openFamily('${f.id}')">Editar</button></td></tr>`
+ }).join(""):`<tr><td colspan="7" class="empty">No se encontraron familias.</td></tr>`;
+ document.getElementById("counter").textContent=`Mostrando ${list.length} de ${familias.length} familias`;
+}
+function newFamily(){const f=familia();familias.push(f);editando=f;vista="formulario";changed();render()}
+function openFamily(id){editando=familias.find(f=>f.id===id);vista="formulario";render()}
+async function back(){editando=null;vista="listado";await saveDB();render()}
+async function removeFamily(){if(!confirm("¿Eliminar esta familia y todas sus personas?"))return;familias=familias.filter(f=>f.id!==editando.id);renumerar();await saveDB();back()}
+async function addPerson(){editando.personas.push(persona());await changed();render()}
+async function removePerson(i){if(editando.personas.length===1){alert("Una familia debe tener al menos una persona.");return}editando.personas.splice(i,1);await changed();render()}
+async function updatePerson(i,k,v){editando.personas[i][k]=v;await changed(); if(k==="nacimiento"||k==="vigencia")render()}
+function renderFormulario(){
+ const f=editando;
+ document.getElementById("app").innerHTML=`
+ <div class="card"><div class="form-head"><div><button class="secondary" onclick="back()">← Volver al listado</button><h2>Familia ${f.numero}</h2></div><button class="danger" onclick="removeFamily()">Eliminar familia</button></div>
+ <p style="color:#666">Rellene únicamente los datos de las personas. La edad y el número de miembros se calculan automáticamente.</p></div>
+ <div class="card">${f.personas.map((p,i)=>`
+ <div class="person"><div class="person-head"><h3>Persona ${i+1}</h3><button class="danger" onclick="removePerson(${i})">Eliminar persona</button></div>
+ <div class="grid">
+ <div><label>Nombre</label><input value="${esc(p.nombre)}" oninput="updatePerson(${i},'nombre',this.value)"></div>
+ <div><label>Apellidos</label><input value="${esc(p.apellidos)}" oninput="updatePerson(${i},'apellidos',this.value)"></div>
+ <div><label>Documento</label><input value="${esc(p.documento)}" oninput="updatePerson(${i},'documento',this.value)"></div>
+ <div><label>Fecha de nacimiento</label><input type="date" value="${p.nacimiento}" onchange="updatePerson(${i},'nacimiento',this.value)"><small>Edad: <b>${edad(p.nacimiento)||"—"}</b></small></div>
+ <div><label>Fecha derivación</label><input type="date" value="${p.derivacion}" onchange="updatePerson(${i},'derivacion',this.value)"></div>
+ <div><label>Vigencia</label><input type="date" value="${p.vigencia}" onchange="updatePerson(${i},'vigencia',this.value)">${caducada(p.vigencia)?'<small style="color:#b00020;font-weight:bold">🔴 VIGENCIA CADUCADA</small>':''}</div>
+ <div><label>Próxima cita</label><input type="date" value="${p.proximaCita}" onchange="updatePerson(${i},'proximaCita',this.value)"><small>Rellénela si la vigencia está caducada y ya tiene cita de renovación.</small></div>
+ <div><label>N.º de miembros</label><input value="${f.personas.length}" disabled></div>
+ </div></div>`).join("")}
+ <div class="actions"><button class="secondary" onclick="addPerson()">+ Añadir persona</button><button class="primary" onclick="back()">Guardar y volver</button></div></div>`;
+}
+function backup(){
+ const data={version:1,fecha:new Date().toISOString(),siguienteFamilia,familias};
+ const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+ download(blob,"copia_seguridad_reparto.json");
+}
+async function restoreFile(e){
+ const file=e.target.files[0];if(!file)return;
+ try{const data=JSON.parse(await file.text());if(!Array.isArray(data.familias))throw Error();
+  familias=data.familias;siguienteFamilia=Math.max(0,...familias.map(f=>f.numero))+1;await saveDB();render();alert("Copia restaurada correctamente.");
+ }catch{alert("El archivo no parece una copia válida de esta aplicación.")}
+ e.target.value="";
+}
+function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500)}
+async function loadSheetJS(){
+ if(window.XLSX)return true;
+ return new Promise(resolve=>{
+  const s=document.createElement("script");s.src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js";
+  s.onload=()=>resolve(true);s.onerror=()=>resolve(false);document.head.appendChild(s);
+ })
+}
+async function exportExcel(){
+ const ok=await loadSheetJS();if(!ok){alert("No se pudo cargar el módulo de Excel. Compruebe que el equipo tiene internet para esta prueba.");return}
+ const wb=XLSX.utils.book_new();
+ const rows=[["N.º de familia","N.º de beneficiario/a","Nombre","Apellidos","Documento","Fecha de nacimiento","Edad","Fecha derivación","Vigencia","ALERTA","N.º de miembros familia","Próxima cita"]];
+ let n=1;
+ familias.forEach(f=>f.personas.forEach((p,i)=>rows.push([i===0?f.numero:"",n++,p.nombre,p.apellidos,p.documento,p.nacimiento?new Date(p.nacimiento):"",edad(p.nacimiento),p.derivacion?new Date(p.derivacion):"",p.vigencia?new Date(p.vigencia):"",caducada(p.vigencia)?"CADUCADA":"",f.personas.length,p.proximaCita?new Date(p.proximaCita):""])));
+ const ws=XLSX.utils.aoa_to_sheet(rows);
+ ws["!freeze"]={xSplit:0,ySplit:1};ws["!autofilter"]={ref:ws["!ref"]};
+ XLSX.utils.book_append_sheet(wb,ws,"Listado");
+ const reparto=XLSX.utils.aoa_to_sheet([["REPARTO"],["Esta hoja se completará usando la lógica de la plantilla v1.4."],["Familias",familias.length],["Beneficiarios",familias.reduce((n,f)=>n+f.personas.length,0)]]);
+ XLSX.utils.book_append_sheet(wb,reparto,"Reparto");
+ const resumen=XLSX.utils.aoa_to_sheet([["RESUMEN"],["Familias",familias.length],["Beneficiarios",familias.reduce((n,f)=>n+f.personas.length,0)],["Familias con vigencia caducada",familias.filter(f=>f.personas.some(p=>caducada(p.vigencia))).length]]);
+ XLSX.utils.book_append_sheet(wb,resumen,"Resumen");
+ XLSX.writeFile(wb,"Listado_Reparto_Entidad.xlsx");
+}
+(async()=>{try{familias=await loadDB();siguienteFamilia=Math.max(0,...familias.map(f=>f.numero))+1}catch(e){console.error(e);familias=[]}render()})();
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@ import { loadDB, saveDB } from "./database.js";
 import { persona, familia, estado } from "./familias.js";
 import { edad, caducada, esc, fmt } from "./utils.js";
 import { exportExcel } from "./excel.js";
+import { version as appVersion } from "../package.json";
 import { readExcel } from "./excel-import.js";
 import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
@@ -447,6 +448,7 @@ function reportError(error) {
 }
 
 const app = document.getElementById("app");
+document.getElementById("appVersion").textContent = appVersion;
 const actions = {
   newFamily, back, removeFamily, addPerson,
   cancelFamily: () => { editando = null; dateDrafts.clear(); vista = "listado"; setSaveState("Cambios pendientes descartados.", "saved"); render(); },

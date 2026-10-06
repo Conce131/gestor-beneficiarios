@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {resumen, envases, validarReparto} from '../src/reparto.mjs';
+import {resumen, envases, validarReparto, prepararReparto, alimentos} from '../src/reparto.mjs';
 
 test('Reparto usa familias de 1 a 10, divide por personas y redondea por tamaño',()=>{
  const r=resumen([1,2,2,11].map(n=>({personas:Array.from({length:n},()=>({}))})));
@@ -26,4 +26,20 @@ test('Reparto admite cero y cantidades decimales y rechaza datos inválidos',()=
  assert.equal(validarReparto([{nombre:'Arroz',cantidad:2.5}])[0].cantidad,2.5);
  assert.throws(()=>validarReparto([{nombre:'Arroz',cantidad:-1}]));
  assert.throws(()=>validarReparto([{nombre:'Arroz',cantidad:'mucho'}]));
+});
+
+test('Al volver a abrir Reparto conserva las filas eliminadas, incluso si se quitaron todas',()=>{
+ assert.equal(prepararReparto(null).length, alimentos.length);
+ assert.deepEqual(prepararReparto([]), []);
+ const guardado = [{nombre:'Producto personalizado',cantidad:12}];
+ assert.deepEqual(prepararReparto(guardado), guardado);
+ assert.notEqual(prepararReparto(guardado), guardado);
+});
+
+test('La migración retira los huecos antiguos sin borrar alimentos personalizados',()=>{
+ const antiguo = [...alimentos.map(nombre=>({nombre,cantidad:''})), ...Array.from({length:7},()=>({nombre:'VARIOS',cantidad:''}))];
+ assert.equal(prepararReparto(antiguo).length, alimentos.length);
+ antiguo[15].cantidad = 20;
+ assert.deepEqual(prepararReparto(antiguo), antiguo);
+ assert.equal(antiguo.length, 16);
 });

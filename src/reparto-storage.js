@@ -5,7 +5,7 @@ let store, queue = Promise.resolve();
 async function getStore() { return store ??= load('reparto.json', {autoSave:false}); }
 export async function loadReparto() {
   const data = isTauri() ? await (await getStore()).get('alimentos') : JSON.parse(localStorage.getItem('gestor-reparto') || 'null');
-  return validarReparto(data);
+  return data == null ? null : validarReparto(data);
 }
 export function saveReparto(data) {
   const snapshot = structuredClone(data);

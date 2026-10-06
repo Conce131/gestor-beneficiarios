@@ -1,5 +1,13 @@
 export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva'];
 export const MAX_REPARTO_FILAS = 16;
+export function prepararReparto(datos) {
+  if (datos == null) return alimentos.map(nombre => ({ nombre, cantidad: "" }));
+  const filas = validarReparto(datos);
+  // Retira únicamente los siete huecos originales sin usar de la versión antigua.
+  const antiguo = filas.length === 16 && alimentos.every((nombre, i) => filas[i].nombre === nombre)
+    && filas.slice(alimentos.length).every(fila => fila.nombre === "VARIOS" && fila.cantidad === "");
+  return antiguo ? filas.slice(0, alimentos.length) : filas;
+}
 export function resumen(familias, hoy = new Date()) {
   const personas = familias.flatMap(f => f.personas);
   const tamanos = Array.from({length:10}, (_, i) => familias.filter(f => f.personas.length === i + 1).length);

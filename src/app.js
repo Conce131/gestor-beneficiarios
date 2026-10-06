@@ -7,7 +7,7 @@ import { readExcel } from "./excel-import.js";
 import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
 
-import { alimentos, MAX_REPARTO_FILAS, resumen, envases } from "./reparto.mjs";
+import { prepararReparto, MAX_REPARTO_FILAS, resumen, envases } from "./reparto.mjs";
 import { loadReparto, saveReparto } from "./reparto-storage.js";
 import companyLogo from "../bancoteide_logo.png?url";
 import { toPng } from "html-to-image";
@@ -84,6 +84,7 @@ function navegacion() {
   return `<nav class="card toolbar" aria-label="Secciones">${[['listado', 'Listado'], ['reparto', 'Reparto'], ['resumen', 'Resumen']].map(([id, texto]) => `<button data-action="section" data-view="${id}" class="${vista === id ? 'primary' : 'secondary'}" aria-current="${vista === id ? 'page' : 'false'}">${texto}</button>`).join('')}</nav>`;
 }
 function render() {
+  document.getElementById("app").dataset.view = vista;
   if (vista === 'formulario') renderFormulario();
   else if (vista === 'resumen') renderResumen();
   else if (vista === 'reparto') renderReparto();
@@ -273,13 +274,14 @@ function renderListado() {
  </ul>
  <small>El estado de la familia depende de las vigencias y citas de sus miembros.</small>
  </div>
- <div class="card"><div class="table-wrap"><table><thead id="listHead"><tr><th>N.º</th><th>Familia</th><th>Miembros</th><th>Vigencia más próxima</th><th>Próxima cita</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div><p id="counter" style="font-size:13px;color:#666"></p></div>
+ <div class="card list-print-card"><div class="list-print-heading"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"><h2 id="listPrintTitle"></h2><p id="listPrintFilters"></p></div><div class="table-wrap"><table><thead id="listHead"><tr><th>N.º</th><th>Familia</th><th>Miembros</th><th>Vigencia más próxima</th><th>Próxima cita</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div><p id="counter" style="font-size:13px;color:#666"></p></div>
  <div class="card">
  <h2 style="margin-top:0">Datos y copias de seguridad</h2>
  <div class="actions">
  <button class="secondary" data-action="importExcel">${icon("excel")} Cargar Excel en este ordenador</button>
  <input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel>
  <button class="primary" data-action="exportExcel">${icon("excel")} Generar Excel</button>
+ <button class="secondary" data-action="printListado">Imprimir listado</button>
  </div>
  <p class="save">El estado del guardado aparece en la parte superior de la aplicación.</p>
  <div class="notice">Los cambios se guardan automáticamente en este ordenador. Para continuar en otro equipo, genera el Excel y cárgalo allí desde este apartado. Mantén una sola copia activa del listado para evitar ediciones distintas en cada equipo.</div>
@@ -454,6 +456,7 @@ const actions = {
   listMode: target => { modoListado = target.dataset.mode; renderListado(); renderAppointmentAlert(); requestAnimationFrame(updatePageNav); },
   exportSummary,
   printReparto: () => window.print(),
+  printListado: () => window.print(),
   addRepartoRow: async () => {
     if (reparto.length >= MAX_REPARTO_FILAS) return;
     reparto.push({ nombre: "Nuevo alimento", cantidad: "" });
@@ -515,6 +518,12 @@ document.getElementById('pageUp').addEventListener('click', () => window.scrollT
 document.getElementById('pageDown').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
 window.addEventListener('scroll', updatePageNav, { passive: true });
 window.addEventListener('resize', updatePageNav);
+window.addEventListener("beforeprint", () => {
+  if (vista !== "listado") return;
+  document.getElementById("listPrintTitle").textContent = `Listado de ${modoListado} · ${fmt(todayISO())}`;
+  const estadoSeleccionado = app.querySelector("[data-state-filter] option:checked")?.textContent;
+  document.getElementById("listPrintFilters").textContent = [busqueda && `Búsqueda: ${busqueda}`, filtroEstado && `Estado: ${estadoSeleccionado}`].filter(Boolean).join(" · ");
+});
 app.addEventListener("input", async event => {
   const target = event.target;
   if (target.hasAttribute('data-food-name') || target.hasAttribute('data-food-amount')) {
@@ -603,8 +612,7 @@ async function init() {
   try {
     familias = await loadDB();
     const savedReparto = await loadReparto();
-    while (savedReparto.length > alimentos.length && savedReparto.at(-1).nombre === "VARIOS" && savedReparto.at(-1).cantidad === "") savedReparto.pop();
-    reparto = [...savedReparto, ...alimentos.slice(savedReparto.length).map(nombre => ({ nombre, cantidad: "" }))];
+    reparto = prepararReparto(savedReparto);
     if (normalizeTitulares(familias)) await saveDB(familias);
     siguienteFamilia = Math.max(0, ...familias.map(f => f.numero)) + 1;
     render();

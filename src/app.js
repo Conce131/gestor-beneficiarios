@@ -7,7 +7,7 @@ import { readExcel } from "./excel-import.js";
 import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
 
-import { alimentos, resumen, envases } from "./reparto.mjs";
+import { alimentos, MAX_REPARTO_FILAS, resumen, envases } from "./reparto.mjs";
 import { loadReparto, saveReparto } from "./reparto-storage.js";
 import companyLogo from "../bancoteide_logo.png?url";
 import { toPng } from "html-to-image";
@@ -53,8 +53,13 @@ function titularCompleto(f) {
 function validarFormulario() {
   if (!editando || titularCompleto(editando)) return true;
   setSaveState("Completa el nombre, los apellidos y el documento del titular.", "pending");
-  const input = app.querySelector('[data-person] input[required]:invalid');
-  if (input) { input.focus(); input.reportValidity(); }
+  const mensajes = { nombre: "Escribe el nombre del titular.", apellidos: "Escribe los apellidos del titular.", documento: "Escribe el documento del titular." };
+  const input = [...app.querySelectorAll('[data-person] input[required]')].find(field => !field.value.trim());
+  if (input) {
+    input.setCustomValidity(mensajes[input.dataset.field]);
+    input.focus();
+    input.reportValidity();
+  }
   return false;
 }
 async function changed() {
@@ -190,11 +195,14 @@ async function exportSummary() {
 }
 function renderReparto() {
   const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
+  const tamanosActivos = r.tamanos.flatMap((cantidad, i) => cantidad ? [i + 1] : []);
+  const anchoColumnaFamilia = tamanosActivos.length ? (62 / tamanosActivos.length).toFixed(3) : "0";
   app.innerHTML = navegacion() + `<section class="card reparto-page">
     <div class="reparto-heading"><div><div class="reparto-print-brand"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"></div><h2>Reparto de alimentos</h2><p class="reparto-intro">Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p></div><div class="reparto-actions"><button class="secondary" data-action="printReparto">Imprimir reparto</button><button class="primary" data-action="exportExcel">Generar Excel</button></div></div>
     <div class="reparto-summary"><span><strong>${r.tamanos.reduce((a, b) => a + b, 0)}</strong> familias</span><span><strong>${total}</strong> beneficiarios para el reparto</span></div>
     ${r.fuera ? `<div class="notice reparto-screen-note">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice reparto-screen-note">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}
-    <div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${r.tamanos.map((_, i) => `<th>${i + 1} miembros</th>`).join('')}</tr><tr><th>Familias</th><th></th>${r.tamanos.map(n => `<th>${n}</th>`).join('')}</tr><tr><th>Beneficiarios</th><th></th>${r.tamanos.map((n, i) => `<th>${n * (i + 1)}</th>`).join('')}</tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${r.tamanos.map((n, j) => `<td data-result="${i}:${j}">${envases(a.cantidad, j + 1, n, total) ?? '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${size} miembros</th>`).join('')}<th class="reparto-row-action-heading">Acciones</th></tr><tr><th>Familias</th><th></th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1]}</th>`).join('')}<th></th></tr><tr><th>Beneficiarios</th><th></th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1] * size}</th>`).join('')}<th></th></tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${tamanosActivos.map(size => `<td class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%" data-result="${i}:${size - 1}">${envases(a.cantidad, size, r.tamanos[size - 1], total) ?? '—'}</td>`).join('')}<td class="reparto-row-action"><button type="button" class="danger" data-action="removeRepartoRow" data-index="${i}" aria-label="Quitar ${esc(a.nombre || `fila ${i + 1}`)}" title="Quitar fila">${icon("trash")}</button></td></tr>`).join('')}</tbody></table></div>
+    <div class="reparto-row-actions"><button class="secondary" data-action="addRepartoRow" ${reparto.length >= MAX_REPARTO_FILAS ? "disabled" : ""}>${icon("add")} Añadir fila</button><span>${reparto.length} de ${MAX_REPARTO_FILAS} filas · el Excel admite hasta ${MAX_REPARTO_FILAS}</span></div>
     <p class="reparto-explanation">Se divide cada cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p>
   </section>`;
 }
@@ -311,7 +319,25 @@ function filterTable() {
 }
 async function newFamily() { editando = familia(siguienteFamilia); vista = "formulario"; setSaveState("Completa el titular para crear la familia.", "pending"); render() }
 function openFamily(id) { if (!validarFormulario()) return; const f = familias.find(f => f.id === id); if (!f) return; editando = structuredClone(f); vista = "formulario"; render() }
-async function back() { if (!validarFormulario()) return; await changed(); dateDrafts.clear(); editando = null; vista = "listado"; render() }
+async function back() {
+  const isNewFamily = editando && !familias.some(f => f.id === editando.id);
+  const titular = editando?.personas.find(person => person.titular);
+  const titularVacio = titular && ["nombre", "apellidos", "documento", "nacimiento", "derivacion", "vigencia", "proximaCita"].every(key => !String(titular[key] ?? "").trim());
+  if (isNewFamily && editando.personas.length === 1 && titularVacio) {
+    dateDrafts.clear();
+    editando = null;
+    vista = "listado";
+    setSaveState("Borrador vacío descartado.", "saved");
+    render();
+    return;
+  }
+  if (!validarFormulario()) return;
+  await changed();
+  dateDrafts.clear();
+  editando = null;
+  vista = "listado";
+  render();
+}
 async function removeFamily() { if (!confirm("¿Eliminar esta familia y todas sus personas?")) return; familias = familias.filter(f => f.id !== editando.id); editando = null; renumerar(); await changed(); vista = "listado"; render() }
 async function addPerson() {
   const titular = editando.personas.find(person => person.titular) ?? editando.personas[0];
@@ -428,6 +454,28 @@ const actions = {
   listMode: target => { modoListado = target.dataset.mode; renderListado(); renderAppointmentAlert(); requestAnimationFrame(updatePageNav); },
   exportSummary,
   printReparto: () => window.print(),
+  addRepartoRow: async () => {
+    if (reparto.length >= MAX_REPARTO_FILAS) return;
+    reparto.push({ nombre: "Nuevo alimento", cantidad: "" });
+    setSaveState("Guardando Reparto…", "saving");
+    try {
+      await saveReparto(reparto);
+      setSaveState("Reparto guardado.", "saved");
+      render();
+    } catch (error) { reportError(error); }
+  },
+  removeRepartoRow: async target => {
+    const index = Number(target.dataset.index), alimento = reparto[index];
+    if (!alimento) return;
+    if ((alimento.cantidad !== "" || (alimento.nombre && alimento.nombre !== "Nuevo alimento")) && !confirm(`¿Quitar «${alimento.nombre}» y su cantidad asignada del Reparto?`)) return;
+    reparto.splice(index, 1);
+    setSaveState("Guardando Reparto…", "saving");
+    try {
+      await saveReparto(reparto);
+      setSaveState("Reparto guardado.", "saved");
+      render();
+    } catch (error) { reportError(error); }
+  },
   openFamily: target => openFamily(target.dataset.id),
   removePerson: target => removePerson(Number(target.dataset.index)),
   exportExcel: async target => {
@@ -476,7 +524,10 @@ app.addEventListener("input", async event => {
       if (!target.validity.valid || (target.value !== '' && !Number.isFinite(Number(target.value)))) return;
       reparto[index].cantidad = target.value === '' ? '' : Number(target.value);
       const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
-      r.tamanos.forEach((n, j) => app.querySelector(`[data-result="${index}:${j}"]`).textContent = envases(reparto[index].cantidad, j + 1, n, total) ?? '—');
+      r.tamanos.forEach((n, j) => {
+        const cell = app.querySelector(`[data-result="${index}:${j}"]`);
+        if (cell) cell.textContent = envases(reparto[index].cantidad, j + 1, n, total) ?? '—';
+      });
     }
     setSaveState('Guardando reparto…', 'saving');
     try { await saveReparto(reparto); setSaveState('Reparto guardado.'); } catch (error) { reportError(error); }
@@ -505,6 +556,7 @@ app.addEventListener("input", async event => {
     return;
   }
   if (!target.dataset.field || target.type === "date") return;
+  if (target.required) target.setCustomValidity("");
   try { await updatePerson(Number(target.dataset.index), target.dataset.field, target.value); }
   catch (error) { reportError(error); }
 });
@@ -551,7 +603,8 @@ async function init() {
   try {
     familias = await loadDB();
     const savedReparto = await loadReparto();
-    reparto = alimentos.map((nombre, i) => savedReparto[i] ?? { nombre, cantidad: "" });
+    while (savedReparto.length > alimentos.length && savedReparto.at(-1).nombre === "VARIOS" && savedReparto.at(-1).cantidad === "") savedReparto.pop();
+    reparto = [...savedReparto, ...alimentos.slice(savedReparto.length).map(nombre => ({ nombre, cantidad: "" }))];
     if (normalizeTitulares(familias)) await saveDB(familias);
     siguienteFamilia = Math.max(0, ...familias.map(f => f.numero)) + 1;
     render();

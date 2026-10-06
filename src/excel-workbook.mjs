@@ -1,4 +1,5 @@
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate";
+import { MAX_REPARTO_FILAS } from "./reparto.mjs";
 
 const NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 // La primera fórmula de miembros con referencias invertidas está en K997.
@@ -82,7 +83,8 @@ export function buildWorkbook(templateBytes, familias, reparto) {
   if (reparto) {
     const repartoSheet = parse(files['xl/worksheets/sheet2.xml']);
     const repartoCells = new Map(Array.from(repartoSheet.getElementsByTagNameNS(NS,'c'), c=>[c.getAttribute('r'),c]));
-    for (const [i, alimento] of reparto.entries()) {
+    for (let i = 0; i < MAX_REPARTO_FILAS; i++) {
+      const alimento = reparto[i] ?? { nombre: "", cantidad: "" };
       for (const [column, value] of [['B',alimento.nombre],['C',alimento.cantidad]]) {
         const ref = `${column}${15+i}`;
         const cell = repartoCells.get(ref);

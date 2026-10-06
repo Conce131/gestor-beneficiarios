@@ -1,4 +1,5 @@
-export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva', ...Array(7).fill('VARIOS')];
+export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva'];
+export const MAX_REPARTO_FILAS = 16;
 export function resumen(familias, hoy = new Date()) {
   const personas = familias.flatMap(f => f.personas);
   const tamanos = Array.from({length:10}, (_, i) => familias.filter(f => f.personas.length === i + 1).length);
@@ -19,7 +20,7 @@ export function envases(cantidad, miembros, familias, total) {
 }
 export function validarReparto(datos) {
   if (datos == null) return [];
-  if (!Array.isArray(datos) || datos.length > alimentos.length) throw new Error('El reparto del archivo no es válido.');
+  if (!Array.isArray(datos) || datos.length > MAX_REPARTO_FILAS) throw new Error('El reparto del archivo no es válido.');
   return datos.map(d => {
     if (!d || typeof d.nombre !== 'string' || d.nombre.length > 100 || !(d.cantidad === '' || (typeof d.cantidad === 'number' && Number.isFinite(d.cantidad) && d.cantidad >= 0))) throw new Error('Hay una cantidad o un alimento inválido en el reparto.');
     return {nombre:d.nombre, cantidad:d.cantidad};

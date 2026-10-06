@@ -9,6 +9,7 @@ import { isTauri } from "@tauri-apps/api/core";
 
 import { alimentos, resumen, envases } from "./reparto.mjs";
 import { loadReparto, saveReparto } from "./reparto-storage.js";
+import companyLogo from "../bancoteide_logo.png?url";
 import { toPng } from "html-to-image";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeFile } from "@tauri-apps/plugin-fs";
@@ -40,15 +41,34 @@ function renumerar() {
 function setSaveState(message, status = "saved") {
   const indicator = document.getElementById("saveState");
   if (indicator) {
-    indicator.textContent = message;
+    indicator.innerHTML = `<span class="save-symbol">${icon("save")}</span><span>${status === "saved" ? "Autoguardado" : status === "saving" ? "Guardando…" : status === "pending" ? "Pendiente de guardar" : "No se ha podido guardar"}</span>`;
+    indicator.title = message;
     indicator.dataset.status = status;
   }
 }
+function titularCompleto(f) {
+  const titulares = f.personas.filter(p => p.titular);
+  return titulares.length === 1 && ["nombre", "apellidos", "documento"].every(k => String(titulares[0][k] ?? "").trim());
+}
+function validarFormulario() {
+  if (!editando || titularCompleto(editando)) return true;
+  setSaveState("Completa el nombre, los apellidos y el documento del titular.", "pending");
+  const input = app.querySelector('[data-person] input[required]:invalid');
+  if (input) { input.focus(); input.reportValidity(); }
+  return false;
+}
 async function changed() {
+  if (editando && !titularCompleto(editando)) {
+    setSaveState("Completa el titular para guardar; los cambios siguen pendientes en el formulario.", "pending");
+    return;
+  }
   const where = isTauri() ? "este ordenador" : "este navegador";
   setSaveState(`Guardando en ${where}…`, "saving");
   try {
-    await saveDB(familias);
+    const next = editando ? [...familias.filter(f => f.id !== editando.id), structuredClone(editando)].sort((a, b) => a.numero - b.numero) : familias;
+    await saveDB(next);
+    familias = next;
+    siguienteFamilia = Math.max(0, ...familias.map(f => f.numero)) + 1;
     setSaveState(`Guardado en ${where}.`, "saved");
   } catch (error) {
     setSaveState("Error: no se guardaron los últimos cambios.", "error");
@@ -64,6 +84,7 @@ function render() {
   else if (vista === 'reparto') renderReparto();
   else renderListado();
   renderAppointmentAlert();
+  renderDuplicateAlert();
   requestAnimationFrame(updatePageNav);
 }
 function todayISO() {
@@ -82,6 +103,53 @@ function renderAppointmentAlert() {
   alertBox.hidden = overdue.length === 0;
   if (!overdue.length) { alertBox.replaceChildren(); return; }
   alertBox.innerHTML = `<strong>Hay ${overdue.length === 1 ? 'una cita de renovación vencida' : `${overdue.length} citas de renovación vencidas`}.</strong> Revisa estos casos, confirma que la vigencia está al día y actualízala antes de enviar el listado:<ul>${overdue.map(item => `<li>Familia ${item.numero}${item.name ? ` — ${esc(item.name)}` : ''}: cita del ${fmt(item.cita)}</li>`).join('')}</ul>`;
+}
+function normalizeDuplicateKey(value) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es").replace(/[^\p{L}\p{N}]/gu, "");
+}
+function findDuplicateGroups() {
+  const people = familias.flatMap(family => family.personas.map((person, index) => ({
+    family,
+    person,
+    key: `${family.id}:${index}`,
+    name: `${person.nombre} ${person.apellidos}`.trim(),
+  })));
+  const groups = new Map();
+  for (const [label, valueOf] of [
+    ["Nombre y apellidos", item => {
+      if (!String(item.person.nombre ?? "").trim() || !String(item.person.apellidos ?? "").trim()) return "";
+      return normalizeDuplicateKey(`${item.person.nombre} ${item.person.apellidos}`);
+    }],
+    ["Documento", item => normalizeDuplicateKey(item.person.documento)],
+  ]) {
+    const byValue = new Map();
+    for (const item of people) {
+      const value = valueOf(item);
+      if (!value) continue;
+      if (!byValue.has(value)) byValue.set(value, []);
+      byValue.get(value).push(item);
+    }
+    for (const matches of byValue.values()) {
+      if (matches.length < 2) continue;
+      const groupKey = matches.map(item => item.key).sort().join("|");
+      const group = groups.get(groupKey) ?? { people: matches, reasons: [] };
+      group.reasons.push(label);
+      groups.set(groupKey, group);
+    }
+  }
+  return [...groups.values()].sort((a, b) => a.people[0].family.numero - b.people[0].family.numero);
+}
+function renderDuplicateAlert() {
+  const alertBox = document.getElementById("duplicateAlert");
+  if (!alertBox) return;
+  const groups = findDuplicateGroups();
+  alertBox.hidden = groups.length === 0;
+  if (!groups.length) {
+    alertBox.replaceChildren();
+    return;
+  }
+  const count = groups.reduce((sum, group) => sum + group.people.length, 0);
+  alertBox.innerHTML = `<strong>Revisa posibles duplicados: ${groups.length} coincidencia${groups.length === 1 ? "" : "s"} en ${count} registros.</strong><details><summary>Ver coincidencias</summary><ul>${groups.map(group => `<li><span>${group.reasons.join(" y ")}:</span> ${group.people.map(item => `<button type="button" class="duplicate-family-link" data-duplicate-family="${esc(item.family.id)}">Familia ${item.family.numero} · ${esc(item.name || "Persona sin nombre")}</button>`).join(" ")}</li>`).join("")}</ul></details>`;
 }
 function updatePageNav() {
   const up = document.getElementById('pageUp'), down = document.getElementById('pageDown');
@@ -122,7 +190,13 @@ async function exportSummary() {
 }
 function renderReparto() {
   const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
-  app.innerHTML = navegacion() + `<div class="card"><h2>Reparto de alimentos</h2><p>Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p><p>${r.tamanos.reduce((a, b) => a + b, 0)} familias · ${total} beneficiarios para el reparto</p>${r.fuera ? `<div class="notice">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}<div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${r.tamanos.map((_, i) => `<th>${i + 1} miembros</th>`).join('')}</tr><tr><th>Familias</th><th></th>${r.tamanos.map(n => `<th>${n}</th>`).join('')}</tr><tr><th>Beneficiarios</th><th></th>${r.tamanos.map((n, i) => `<th>${n * (i + 1)}</th>`).join('')}</tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${r.tamanos.map((n, j) => `<td data-result="${i}:${j}">${envases(a.cantidad, j + 1, n, total) ?? '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div><p>Se divide la cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p><button class="primary" data-action="exportExcel">Generar Excel</button></div>`;
+  app.innerHTML = navegacion() + `<section class="card reparto-page">
+    <div class="reparto-heading"><div><div class="reparto-print-brand"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"></div><h2>Reparto de alimentos</h2><p class="reparto-intro">Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p></div><div class="reparto-actions"><button class="secondary" data-action="printReparto">Imprimir reparto</button><button class="primary" data-action="exportExcel">Generar Excel</button></div></div>
+    <div class="reparto-summary"><span><strong>${r.tamanos.reduce((a, b) => a + b, 0)}</strong> familias</span><span><strong>${total}</strong> beneficiarios para el reparto</span></div>
+    ${r.fuera ? `<div class="notice reparto-screen-note">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice reparto-screen-note">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}
+    <div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${r.tamanos.map((_, i) => `<th>${i + 1} miembros</th>`).join('')}</tr><tr><th>Familias</th><th></th>${r.tamanos.map(n => `<th>${n}</th>`).join('')}</tr><tr><th>Beneficiarios</th><th></th>${r.tamanos.map((n, i) => `<th>${n * (i + 1)}</th>`).join('')}</tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${r.tamanos.map((n, j) => `<td data-result="${i}:${j}">${envases(a.cantidad, j + 1, n, total) ?? '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="reparto-explanation">Se divide cada cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p>
+  </section>`;
 }
 
 function displayDate(value) {
@@ -235,10 +309,10 @@ function filterTable() {
   }).join("") : `<tr><td colspan="8" class="empty">No se encontraron familias.</td></tr>`;
   document.getElementById("counter").textContent = `Mostrando ${list.length} de ${familias.length} familias`;
 }
-async function newFamily() { const f = familia(siguienteFamilia++); familias.push(f); editando = f; vista = "formulario"; await changed(); render() }
-function openFamily(id) { editando = familias.find(f => f.id === id); vista = "formulario"; render() }
-async function back() { dateDrafts.clear(); editando = null; vista = "listado"; await changed(); render() }
-async function removeFamily() { if (!confirm("¿Eliminar esta familia y todas sus personas?")) return; familias = familias.filter(f => f.id !== editando.id); renumerar(); await changed(); editando = null; vista = "listado"; render() }
+async function newFamily() { editando = familia(siguienteFamilia); vista = "formulario"; setSaveState("Completa el titular para crear la familia.", "pending"); render() }
+function openFamily(id) { if (!validarFormulario()) return; const f = familias.find(f => f.id === id); if (!f) return; editando = structuredClone(f); vista = "formulario"; render() }
+async function back() { if (!validarFormulario()) return; await changed(); dateDrafts.clear(); editando = null; vista = "listado"; render() }
+async function removeFamily() { if (!confirm("¿Eliminar esta familia y todas sus personas?")) return; familias = familias.filter(f => f.id !== editando.id); editando = null; renumerar(); await changed(); vista = "listado"; render() }
 async function addPerson() {
   const titular = editando.personas.find(person => person.titular) ?? editando.personas[0];
   const nueva = persona();
@@ -248,13 +322,14 @@ async function addPerson() {
   await changed();
   render();
 }
-async function removePerson(i) { if (editando.personas.length === 1) { alert("Una familia debe tener al menos una persona."); return } const eraTitular = editando.personas[i].titular; editando.personas.splice(i, 1); if (eraTitular) editando.personas[0].titular = true; await changed(); render() }
+async function removePerson(i) { if (editando.personas.length === 1) { alert("Una familia debe tener al menos una persona."); return } const eraTitular = editando.personas[i].titular; editando.personas.splice(i, 1); if (eraTitular) { editando.personas[0].titular = true; editando.personas[0].menor = false; } await changed(); render() }
 async function updateTitular(index, checked) {
   if (!checked) {
     app.querySelector(`[data-titular][data-index="${index}"]`).checked = true;
     return;
   }
   editando.personas.forEach((person, personIndex) => person.titular = personIndex === index);
+  editando.personas[index].menor = false;
   await changed();
   renderFormulario();
 }
@@ -267,6 +342,11 @@ async function updatePerson(i, k, v) {
     app.querySelectorAll(`[data-shared-date="${k}"]`).forEach(input => input.value = displayDate(v));
   } else {
     editando.personas[i][k] = v;
+    if (k === "nacimiento" && v) {
+      editando.personas[i].menor = !editando.personas[i].titular && edad(v) < 18;
+      const checkbox = app.querySelector(`[data-menor][data-index="${i}"]`);
+      if (checkbox) checkbox.checked = editando.personas[i].menor;
+    }
   }
   // Actualizar solo los avisos conserva el foco y la selección del año.
   const card = app.querySelector(`[data-person="${i}"]`);
@@ -281,6 +361,7 @@ async function updatePerson(i, k, v) {
   }
   await changed();
   renderAppointmentAlert();
+  renderDuplicateAlert();
 }
 function renderFormulario() {
   const f = editando;
@@ -289,17 +370,18 @@ function renderFormulario() {
  <p style="color:#666">Rellene únicamente los datos de las personas. La edad y el número de miembros se calculan automáticamente. Escriba las fechas como día/mes/año (por ejemplo, 15/06/1967) o use el botón de calendario. Las fechas de derivación y vigencia son comunes a la familia: edítelas en la persona titular. En los demás miembros se muestran como referencia.</p></div>
  <div class="card">${f.personas.map((p, i) => `
  <div class="person" data-person="${i}"><div class="person-head"><div><h3>${p.titular ? "Titular" : `Miembro ${i + 1}`}</h3><label class="titular-toggle"><input type="checkbox" data-titular data-index="${i}" ${p.titular ? "checked" : ""}> Es titular</label></div><button class="danger" data-action="removePerson" data-index="${i}">${icon("trash")} Eliminar persona</button></div>
+ ${!p.titular ? `<label class="titular-toggle"><input type="checkbox" data-menor data-index="${i}" ${p.menor ? "checked" : ""}> Menor de edad (nombre y documento opcionales)</label>` : '<p>Nombre, apellidos y documento del titular son obligatorios.</p>'}
  <div class="grid">
- <div><label>Nombre</label><input value="${esc(p.nombre)}" data-field="nombre" data-index="${i}"></div>
- <div><label>Apellidos</label><input value="${esc(p.apellidos)}" data-field="apellidos" data-index="${i}"></div>
- <div><label>Documento</label><input value="${esc(p.documento)}" data-field="documento" data-index="${i}"></div>
+ <div><label>Nombre</label><input value="${esc(p.nombre)}" data-field="nombre" data-index="${i}" ${p.titular ? 'required pattern=".*\\S.*"' : ""}></div>
+ <div><label>Apellidos</label><input value="${esc(p.apellidos)}" data-field="apellidos" data-index="${i}" ${p.titular ? 'required pattern=".*\\S.*"' : ""}></div>
+ <div><label>Documento</label><input value="${esc(p.documento)}" data-field="documento" data-index="${i}" ${p.titular ? 'required pattern=".*\\S.*"' : ""}></div>
  ${dateField(p, i, "nacimiento", "Fecha de nacimiento", `<small>Edad: <b data-age>${edad(p.nacimiento) === "" ? "—" : edad(p.nacimiento)}</b></small>`)}
  ${p.titular ? dateField(p, i, "derivacion", "Fecha derivación") : sharedDateField(p, "derivacion", "Fecha derivación")}
  ${p.titular ? dateField(p, i, "vigencia", "Vigencia", `<small data-vigencia-status class="date-status ${p.vigencia ? (caducada(p.vigencia) ? "is-expired" : "is-current") : ""}" ${p.vigencia ? "" : "hidden"}>${p.vigencia ? (caducada(p.vigencia) ? "VIGENCIA CADUCADA" : "Vigencia vigente") : ""}</small>`) : sharedDateField(p, "vigencia", "Vigencia")}
  ${dateField(p, i, "proximaCita", "Próxima cita", `<small>Rellénela si la vigencia está caducada y ya tiene cita de renovación.</small>`)}
  <div><label>N.º de miembros</label><input value="${f.personas.length}" disabled></div>
  </div></div>`).join("")}
- <div class="actions"><button class="secondary" data-action="addPerson">${icon("add")} Añadir persona</button><button class="primary" data-action="back">Guardar y volver</button></div></div>`;
+ <div class="actions"><button class="secondary" data-action="addPerson">${icon("add")} Añadir persona</button><button class="primary" data-action="back">Guardar y volver</button><button class="secondary" data-action="cancelFamily">Descartar cambios pendientes</button></div></div>`;
 }
 
 async function importExcelFile(event) {
@@ -339,11 +421,13 @@ function reportError(error) {
 const app = document.getElementById("app");
 const actions = {
   newFamily, back, removeFamily, addPerson,
+  cancelFamily: () => { editando = null; dateDrafts.clear(); vista = "listado"; setSaveState("Cambios pendientes descartados.", "saved"); render(); },
   reload: () => location.reload(),
   section: target => { vista = target.dataset.view; render(); },
   sortColumn: target => { const orden = ordenListado[modoListado]; orden.direccion = orden.columna === target.dataset.column ? -orden.direccion : 1; orden.columna = target.dataset.column; filterTable(); },
   listMode: target => { modoListado = target.dataset.mode; renderListado(); renderAppointmentAlert(); requestAnimationFrame(updatePageNav); },
   exportSummary,
+  printReparto: () => window.print(),
   openFamily: target => openFamily(target.dataset.id),
   removePerson: target => removePerson(Number(target.dataset.index)),
   exportExcel: async target => {
@@ -374,6 +458,10 @@ app.addEventListener("click", async event => {
   const target = event.target.closest("[data-action]");
   if (!target || !app.contains(target)) return;
   try { await actions[target.dataset.action]?.(target); } catch (error) { reportError(error); }
+});
+document.getElementById("duplicateAlert").addEventListener("click", event => {
+  const target = event.target.closest("[data-duplicate-family]");
+  if (target) openFamily(target.dataset.duplicateFamily);
 });
 document.getElementById('pageUp').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 document.getElementById('pageDown').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
@@ -422,6 +510,17 @@ app.addEventListener("input", async event => {
 });
 app.addEventListener("change", async event => {
   const target = event.target;
+  if (target.hasAttribute("data-menor")) {
+    const person = editando.personas[Number(target.dataset.index)];
+    if (target.checked && person.nacimiento && edad(person.nacimiento) >= 18) {
+      target.checked = false;
+      alert("La fecha de nacimiento indica que esta persona es mayor de edad.");
+      return;
+    }
+    person.menor = target.checked;
+    try { await changed(); } catch (error) { reportError(error); }
+    return;
+  }
   if (target.hasAttribute("data-state-filter")) { filtroEstado = target.value; filterTable(); return; }
   if (target.hasAttribute("data-titular")) {
     try { await updateTitular(Number(target.dataset.index), target.checked); }
@@ -470,6 +569,7 @@ async function init() {
   } catch (error) {
     console.error(error);
     const storageStatus = document.getElementById("storageState");
+    setSaveState("No se pudo abrir el almacenamiento local.", "error");
     const mode = isTauri() ? "aplicación de escritorio" : "navegador";
     if (storageStatus) storageStatus.textContent = `Falló la carga del almacenamiento (${mode}).`;
     const detail = error instanceof Error ? error.message : String(error);

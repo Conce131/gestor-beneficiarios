@@ -1,4 +1,5 @@
 const paths = {
+  save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12l4 4v12a2 2 0 0 1-2 2Z"/><path d="M7 3v6h10V3M7 21v-8h10v8"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
   back: '<path d="m15 18-6-6 6-6M9 12h12"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/>',

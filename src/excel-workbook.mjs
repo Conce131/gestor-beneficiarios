@@ -24,6 +24,19 @@ function excelDate(value) {
   return serial < 61 ? serial - 1 : serial;
 }
 
+const nameParticles = new Set(["a", "da", "das", "de", "del", "do", "dos", "e", "la", "las", "los", "van", "von", "y"]);
+
+function excelName(value) {
+  let firstWord = true;
+  return String(value ?? "").trim().toLocaleLowerCase("es-ES").split(/([\s'-]+)/u).map(part => {
+    if (/^[\s'-]+$/u.test(part)) return part;
+    const initial = firstWord;
+    firstWord = false;
+    if (!initial && nameParticles.has(part)) return part;
+    return part.replace(/^\p{L}/u, letter => letter.toLocaleUpperCase("es-ES"));
+  }).join("");
+}
+
 export function buildWorkbook(templateBytes, familias, reparto) {
   const total = familias.reduce((sum, family) => sum + family.personas.length, 0);
   if (total > MAX_BENEFICIARIOS) {
@@ -58,9 +71,9 @@ export function buildWorkbook(templateBytes, familias, reparto) {
     for (const [index, person] of family.personas.entries()) {
       write(`A${row}`, index === 0 ? family.numero : null);
       write(`B${row}`, beneficiary++);
-      for (const [column, field] of [["C", "nombre"], ["D", "apellidos"], ["E", "documento"]]) {
-        write(`${column}${row}`, person[field], true);
-      }
+      write(`C${row}`, excelName(person.nombre), true);
+      write(`D${row}`, excelName(person.apellidos), true);
+      write(`E${row}`, String(person.documento ?? "").trim().toLocaleUpperCase("es-ES"), true);
       for (const [column, field] of [["F", "nacimiento"], ["H", "derivacion"], ["I", "vigencia"], ["L", "proximaCita"]]) {
         write(`${column}${row}`, excelDate(person[field]));
       }

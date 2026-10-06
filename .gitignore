@@ -10,6 +10,7 @@ src-tauri/gen/schemas/
 /GestorBeneficiarios-prueba-Windows-x64.zip
 /INSTRUCCIONES-PRUEBA-WINDOWS.txt
 /listado-prueba-100-personas.xlsx
+/listado-prueba-20-personas.xlsx
 /src-tauri/*.xlsx
 
 # Iconos generados para plataformas y tamaños que esta compilación no usa.

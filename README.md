@@ -290,12 +290,12 @@ Debe existir una forma sencilla de realizar copias de seguridad.
 
 El prototipo actual permite:
 
-- Exportar los datos a JSON.
-- Restaurar posteriormente ese JSON.
+- Exportar los datos a Excel.
+- Cargar posteriormente ese Excel en otra instalación.
 
 Esta funcionalidad debe mantenerse o mejorarse.
 
-El usuario debe poder mover sus datos a otro ordenador mediante una copia de seguridad.
+El usuario debe poder mover sus datos a otro ordenador mediante el Excel generado por la aplicación.
 
 ---
 
@@ -368,8 +368,7 @@ Actualmente incluye, entre otras cosas:
 - Buscador.
 - Cálculo de edad.
 - Control básico de vigencias.
-- Copias JSON.
-- Restauración de copias.
+- Exportación y carga de Excel.
 - Exportación XLSX experimental.
 
 El prototipo debe utilizarse como **referencia**, no necesariamente como arquitectura definitiva.
@@ -515,7 +514,7 @@ La base de la aplicación está organizada con Vite y JavaScript vanilla:
 - `src/app.js`: vistas, estado de la aplicación y eventos.
 - `src/database.js`: almacenamiento local en Tauri o IndexedDB en navegador.
 - `src/familias.js`: creación de familias, personas y cálculo de estado.
-- `src/backups.js`: copias JSON y validación de restauraciones.
+- `src/excel-import.mjs`: lectura de familias desde la hoja Listado.
 - `src/utils.js`: cálculo de edad, fechas y escape de texto.
 - `src/excel.js`: carga de la plantilla local y descarga del Excel.
 - `src/excel-workbook.mjs`: escritura de datos en la plantilla conservando sus partes.
@@ -545,15 +544,15 @@ visual, generar un Excel desde la interfaz y abrirlo en Excel o LibreOffice.
 La compilación de escritorio se abre como una aplicación local y funciona offline.
 
 IndexedDB pertenece al navegador y al origen (protocolo, dirección y puerto).
-Para trasladar los datos desde el HTML original o desde otra dirección, utilizar
-una copia JSON. Las restauraciones sustituyen los datos existentes y piden
+Para trasladar los datos entre instalaciones, generar el Excel desde la aplicación
+y cargarlo en el otro equipo. La carga sustituye los datos existentes y pide
 confirmación antes de hacerlo.
 
 Cuando se ejecuta en el navegador, los cambios se guardan en IndexedDB y la aplicación
-solicita almacenamiento persistente cuando el navegador lo ofrece. La opción de
-traslado guarda una copia JSON manual fuera del almacenamiento principal.
+solicita almacenamiento persistente cuando el navegador lo ofrece. Para trasladar
+datos entre equipos, genera un Excel y cárgalo desde la otra instalación.
 
-La opción `Cargar familias desde Excel` admite archivos `.xlsx` que conserven las
+La opción `Cargar Excel en este ordenador` admite archivos `.xlsx` que conserven las
 columnas de la hoja `Listado` de la plantilla oficial. Muestra el número de familias
 y beneficiarios que detectó y pide confirmación, porque sustituye los datos actuales.
 La hoja de Excel no se modifica; la importación se realiza primero en memoria y se
@@ -573,13 +572,13 @@ Comandos:
 - `npm run tauri build -- --no-bundle`: compilar el ejecutable de escritorio.
 
 La ventana de escritorio guarda los datos localmente y permite trasladar el listado
-mediante un archivo JSON con ventanas nativas. El instalador NSIS de Windows de 64 bits
+mediante el Excel generado por la aplicación. El instalador NSIS de Windows de 64 bits
 está habilitado, con pantallas en español e instalación para la cuenta actual.
 Si WebView2 no está instalado, el instalador lo descarga: ese caso requiere Internet
 durante la instalación. La aplicación funciona sin conexión una vez instalada.
 
 El paquete de prueba `GestorBeneficiarios-instalador-Windows.zip` contiene el instalador,
-el Excel de 100 personas ficticias y las instrucciones. La instalación y ejecución
+el Excel de 20 personas ficticias y las instrucciones. La instalación y ejecución
 deben comprobarse en Windows; el instalador de prueba todavía no está firmado.
 
 Para desarrollar en Debian/Ubuntu, instalar desde una terminal con permisos de
@@ -618,12 +617,11 @@ la aplicación, con una copia del guardado anterior para recuperación. En el na
 se conserva IndexedDB. Al abrir Tauri, si existe información previa de IndexedDB, se
 migra al archivo local automáticamente.
 
-Los botones de traslado abren selectores nativos: `Llevar datos a otro ordenador`
-guarda un archivo JSON elegido por el usuario; `Cargar datos en este ordenador` lo
-lee y pide confirmación antes de sustituir los datos locales. Se puede transportar
-el archivo en un USB. Conviene mantener una sola copia activa del listado y trasladarla
-antes de empezar a trabajar en el otro equipo; no existe sincronización ni mezcla
-automática de cambios.
+Para trasladar datos entre equipos, genera el Excel con `Generar Excel` y carga
+ese archivo desde `Cargar Excel en este ordenador`. La carga pide confirmación
+antes de sustituir los datos locales. Se puede transportar el archivo en un USB.
+Conviene mantener una sola copia activa del listado y trasladarla antes de empezar
+a trabajar en el otro equipo; no existe sincronización ni mezcla automática de cambios.
 
 Al generar el Excel desde Tauri, la aplicación pide dónde guardarlo y luego lo abre
 con el programa asociado a los archivos `.xlsx` del ordenador (por ejemplo, Excel o
@@ -644,7 +642,6 @@ se multiplica por el tamaño y se redondea por familia como en la plantilla.
 Las familias mayores de 10 se muestran en Resumen, pero quedan fuera de Reparto.
 Las cantidades vacías cuentan como cero en el cálculo, igual que Excel.
 Los nombres y cantidades se guardan en `reparto.json` en Tauri (en localStorage
-cuando se abre en navegador), se incluyen en el JSON de traslado y se escriben
-solo en las celdas editables B15:C30 al generar Excel. Las fórmulas se conservan.
-Las copias JSON antiguas se aceptan con Reparto vacío; la importación de Excel
-continúa cargando exclusivamente las familias de Listado.
+cuando se abre en navegador) y se escriben solo en las celdas editables B15:C30
+al generar Excel. Las fórmulas se conservan. Al cargar un Excel se importan las
+familias de la hoja Listado; los datos de Reparto no se importan.

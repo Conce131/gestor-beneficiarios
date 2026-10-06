@@ -2,17 +2,33 @@ import "./styles.css";
 import { loadDB, saveDB } from "./database.js";
 import { persona, familia, estado } from "./familias.js";
 import { edad, caducada, esc, fmt } from "./utils.js";
-import { backup, readBackup } from "./backups.js";
 import { exportExcel } from "./excel.js";
 import { readExcel } from "./excel-import.js";
 import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
-import { loadTransfer, saveTransfer } from "./transfer.js";
 
 import { alimentos, resumen, envases } from "./reparto.mjs";
 import { loadReparto, saveReparto } from "./reparto-storage.js";
+import { toPng } from "html-to-image";
+import { save } from "@tauri-apps/plugin-dialog";
+import { writeFile } from "@tauri-apps/plugin-fs";
 
-let reparto = [], modoListado = "familias", busqueda = "";
+let reparto = [], modoListado = "familias", busqueda = "", filtroEstado = "";
+const ordenListado = { familias: { columna: "numero", direccion: 1 }, personas: { columna: "numero", direccion: 1 } };
+const comparadorListado = new Intl.Collator("es", { numeric: true, sensitivity: "base" });
+function encabezadosListado(columnas) {
+  const orden = ordenListado[modoListado];
+  return '<tr>' + columnas.map(([columna, texto]) => `<th aria-sort="${orden.columna === columna ? (orden.direccion === 1 ? 'ascending' : 'descending') : 'none'}"><button class="column-sort" data-action="sortColumn" data-column="${columna}" title="Ordenar por ${texto}">${texto} <span aria-hidden="true">${orden.columna === columna ? (orden.direccion === 1 ? '↑' : '↓') : '↕'}</span></button></th>`).join('') + '<th></th></tr>';
+}
+function ordenarListado(list, valor) {
+  const { columna, direccion } = ordenListado[modoListado];
+  return list.sort((a, b) => {
+    const x = valor(a, columna), y = valor(b, columna);
+    const vacio = v => v === undefined || v === null || v === '';
+    if (vacio(x) || vacio(y)) return Number(vacio(x)) - Number(vacio(y));
+    return direccion * (typeof x === 'number' && typeof y === 'number' ? x - y : comparadorListado.compare(String(x), String(y)));
+  });
+}
 let familias = [], siguienteFamilia = 1, vista = "listado", editando = null;
 const dateDrafts = new Map();
 function renumerar() {
@@ -40,23 +56,73 @@ async function changed() {
   }
 }
 function navegacion() {
-  return `<nav class="card toolbar" aria-label="Secciones">${[['listado','Listado'],['reparto','Reparto'],['resumen','Resumen']].map(([id, texto])=>`<button data-action="section" data-view="${id}" class="${vista===id?'primary':'secondary'}" aria-current="${vista===id?'page':'false'}">${texto}</button>`).join('')}</nav>`;
+  return `<nav class="card toolbar" aria-label="Secciones">${[['listado', 'Listado'], ['reparto', 'Reparto'], ['resumen', 'Resumen']].map(([id, texto]) => `<button data-action="section" data-view="${id}" class="${vista === id ? 'primary' : 'secondary'}" aria-current="${vista === id ? 'page' : 'false'}">${texto}</button>`).join('')}</nav>`;
 }
-function render(){
-  if (vista === 'formulario') return renderFormulario();
-  if (vista === 'resumen') return renderResumen();
-  if (vista === 'reparto') return renderReparto();
-  renderListado();
+function render() {
+  if (vista === 'formulario') renderFormulario();
+  else if (vista === 'resumen') renderResumen();
+  else if (vista === 'reparto') renderReparto();
+  else renderListado();
+  renderAppointmentAlert();
+  requestAnimationFrame(updatePageNav);
+}
+function todayISO() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+function renderAppointmentAlert() {
+  const alertBox = document.getElementById('appointmentAlert');
+  if (!alertBox) return;
+  const overdue = familias.flatMap(family => {
+    const titular = family.personas.find(p => p.titular) ?? family.personas[0];
+    const name = `${titular?.nombre ?? ''} ${titular?.apellidos ?? ''}`.trim();
+    return family.personas.filter(person => person.proximaCita && person.proximaCita < todayISO())
+      .map(person => ({ numero: family.numero, name, cita: person.proximaCita }));
+  }).sort((a, b) => a.numero - b.numero || a.cita.localeCompare(b.cita));
+  alertBox.hidden = overdue.length === 0;
+  if (!overdue.length) { alertBox.replaceChildren(); return; }
+  alertBox.innerHTML = `<strong>Hay ${overdue.length === 1 ? 'una cita de renovación vencida' : `${overdue.length} citas de renovación vencidas`}.</strong> Revisa estos casos, confirma que la vigencia está al día y actualízala antes de enviar el listado:<ul>${overdue.map(item => `<li>Familia ${item.numero}${item.name ? ` — ${esc(item.name)}` : ''}: cita del ${fmt(item.cita)}</li>`).join('')}</ul>`;
+}
+function updatePageNav() {
+  const up = document.getElementById('pageUp'), down = document.getElementById('pageDown');
+  if (!up || !down) return;
+  const maxY = document.documentElement.scrollHeight - window.innerHeight;
+  up.hidden = window.scrollY < 80;
+  down.hidden = maxY < 80 || window.scrollY > maxY - 80;
 }
 function renderResumen() {
   const r = resumen(familias);
-  app.innerHTML = navegacion() + `<div class="card"><h2>Resumen de beneficiarios</h2><div class="summary"><div class="stat"><strong>${r.familias}</strong>Familias</div><div class="stat"><strong>${r.personas}</strong>Beneficiarios</div></div></div>
-  <div class="report-grid"><div class="card"><h2>Familias por número de miembros</h2><table><thead><tr><th>Miembros</th><th>Familias</th></tr></thead><tbody>${r.tamanos.map((n,i)=>`<tr><td>${i+1}</td><td>${n}</td></tr>`).join('')}${r.fuera?`<tr><td>Más de 10</td><td>${r.fuera}</td></tr>`:''}</tbody></table></div>
-  <div class="card"><h2>Personas por rango de edad</h2><table><thead><tr><th>Rango de la plantilla</th><th>Personas</th></tr></thead><tbody>${['0–2 años','3–18 años','19–100 años'].map((label,i)=>`<tr><td>${label}</td><td>${r.edades[i]}</td></tr>`).join('')}<tr><td>Sin fecha o fuera de los rangos</td><td>${r.sinRango}</td></tr></tbody></table><p>Se utilizan los límites de fechas de la plantilla: desde hace 3 años hasta antes de hoy; desde hace 18 hasta antes de hace 3 años; y desde hace 100 hasta antes de hace 18 años. Estos límites no coinciden exactamente con las etiquetas del Excel.</p></div></div>`;
+  app.innerHTML = navegacion() + `<div class="card summary-actions"><div><h2>Resumen de beneficiarios</h2><p>Consulta y comparte una imagen de este resumen.</p></div><button class="primary" data-action="exportSummary">${icon("download")} Descargar imagen</button></div>
+  <div id="summaryImage" class="summary-image"><h2>Resumen de beneficiarios</h2><p class="summary-date">Generado el ${fmt(todayISO())}</p><div class="card"><div class="summary"><div class="stat"><strong>${r.familias}</strong>Familias</div><div class="stat"><strong>${r.personas}</strong>Beneficiarios</div></div></div>
+  <div class="report-grid"><div class="card"><h2>Familias por número de miembros</h2><table><thead><tr><th>Miembros</th><th>Familias</th></tr></thead><tbody>${r.tamanos.map((n, i) => `<tr><td>${i + 1}</td><td>${n}</td></tr>`).join('')}${r.fuera ? `<tr><td>Más de 10</td><td>${r.fuera}</td></tr>` : ''}</tbody></table></div>
+  <div class="card"><h2>Personas por rango de edad</h2><table><thead><tr><th>Rango de la plantilla</th><th>Personas</th></tr></thead><tbody>${['0–2 años', '3–18 años', '19–100 años'].map((label, i) => `<tr><td>${label}</td><td>${r.edades[i]}</td></tr>`).join('')}<tr><td>Sin fecha o fuera de los rangos</td><td>${r.sinRango}</td></tr></tbody></table><p>Se utilizan los límites de fechas de la plantilla: desde hace 3 años hasta antes de hoy; desde hace 18 hasta antes de hace 3 años; y desde hace 100 hasta antes de hace 18 años. Estos límites no coinciden exactamente con las etiquetas de edad.</p></div></div></div>`;
+}
+
+async function exportSummary() {
+  try {
+    const target = document.getElementById('summaryImage');
+    const dataUrl = await toPng(target, { pixelRatio: 2, backgroundColor: '#f3f5f7' });
+    const filename = `Resumen-beneficiarios-${todayISO()}.png`;
+    if (isTauri()) {
+      const path = await save({ title: 'Guardar imagen del resumen', defaultPath: filename, filters: [{ name: 'Imagen PNG', extensions: ['png'] }] });
+      if (!path) return;
+      const blob = await (await fetch(dataUrl)).blob();
+      await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
+      alert('La imagen del resumen se ha guardado. Ya puedes adjuntarla a un correo.');
+      return;
+    }
+    const link = document.createElement('a');
+    link.download = filename;
+    link.href = dataUrl;
+    link.click();
+  } catch (error) {
+    console.error(error);
+    alert(`No se pudo crear la imagen del resumen. ${error.message}`);
+  }
 }
 function renderReparto() {
-  const r = resumen(familias), total = r.tamanos.reduce((n,c,i)=>n+c*(i+1),0);
-  app.innerHTML = navegacion() + `<div class="card"><h2>Reparto de alimentos</h2><p>Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p><p>${r.tamanos.reduce((a,b)=>a+b,0)} familias · ${total} beneficiarios para el reparto</p>${r.fuera?`<div class="notice">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>`:''}${!total?'<p class="notice">Añade familias de 1 a 10 miembros para calcular el reparto.</p>':''}<div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${r.tamanos.map((_,i)=>`<th>${i+1} miembros</th>`).join('')}</tr><tr><th>Familias</th><th></th>${r.tamanos.map(n=>`<th>${n}</th>`).join('')}</tr><tr><th>Beneficiarios</th><th></th>${r.tamanos.map((n,i)=>`<th>${n*(i+1)}</th>`).join('')}</tr></thead><tbody>${reparto.map((a,i)=>`<tr><td><input aria-label="Nombre del alimento ${i+1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${r.tamanos.map((n,j)=>`<td data-result="${i}:${j}">${envases(a.cantidad,j+1,n,total)??'—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div><p>Se divide la cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p><button class="primary" data-action="exportExcel">Generar Excel</button></div>`;
+  const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
+  app.innerHTML = navegacion() + `<div class="card"><h2>Reparto de alimentos</h2><p>Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p><p>${r.tamanos.reduce((a, b) => a + b, 0)} familias · ${total} beneficiarios para el reparto</p>${r.fuera ? `<div class="notice">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}<div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${r.tamanos.map((_, i) => `<th>${i + 1} miembros</th>`).join('')}</tr><tr><th>Familias</th><th></th>${r.tamanos.map(n => `<th>${n}</th>`).join('')}</tr><tr><th>Beneficiarios</th><th></th>${r.tamanos.map((n, i) => `<th>${n * (i + 1)}</th>`).join('')}</tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${r.tamanos.map((n, j) => `<td data-result="${i}:${j}">${envases(a.cantidad, j + 1, n, total) ?? '—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div><p>Se divide la cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p><button class="primary" data-action="exportExcel">Generar Excel</button></div>`;
 }
 
 function displayDate(value) {
@@ -99,19 +165,21 @@ function normalizeTitulares(familias) {
   }
   return wasChanged;
 }
-function renderListado(){
- document.getElementById("app").innerHTML=navegacion()+`
+function renderListado() {
+  document.getElementById("app").innerHTML = navegacion() + `
  <div class="card"><div class="toolbar">
- <button data-action="listMode" data-mode="familias" aria-pressed="${modoListado==='familias'}" class="${modoListado==='familias'?'primary':'secondary'}">Familias</button>
- <button data-action="listMode" data-mode="personas" aria-pressed="${modoListado==='personas'}" class="${modoListado==='personas'?'primary':'secondary'}">Personas</button>
+ <button data-action="listMode" data-mode="familias" aria-pressed="${modoListado === 'familias'}" class="${modoListado === 'familias' ? 'primary' : 'secondary'}">Familias</button>
+ <button data-action="listMode" data-mode="personas" aria-pressed="${modoListado === 'personas'}" class="${modoListado === 'personas' ? 'primary' : 'secondary'}">Personas</button>
+ <label class="state-filter">Estado de la familia
+ <select data-state-filter aria-label="Filtrar por estado de la familia">${[['', 'Todos'], ['ok', 'Correcta'], ['warn', 'Próxima'], ['expired', 'Caducada'], ['appointment', 'Cita pendiente']].map(([value, label]) => `<option value="${value}" ${filtroEstado === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
  <input value="${esc(busqueda)}" id="search" class="search" placeholder="Buscar familia, nombre, apellidos o documento..." data-search>
  <button class="primary" data-action="newFamily">${icon("add")} Nueva familia</button>
  </div></div>
  <div class="summary">
  <div class="stat"><strong>${familias.length}</strong>Familias</div>
- <div class="stat"><strong>${familias.reduce((n,f)=>n+f.personas.length,0)}</strong>Beneficiarios</div>
- <div class="stat"><strong>${familias.filter(f=>f.personas.some(p=>caducada(p.vigencia))).length}</strong>Caducadas</div>
- <div class="stat"><strong>${familias.filter(f=>f.personas.some(p=>p.proximaCita)).length}</strong>Con próxima cita</div>
+ <div class="stat"><strong>${familias.reduce((n, f) => n + f.personas.length, 0)}</strong>Beneficiarios</div>
+ <div class="stat"><strong>${familias.filter(f => f.personas.some(p => caducada(p.vigencia))).length}</strong>Caducadas</div>
+ <div class="stat"><strong>${familias.filter(f => f.personas.some(p => p.proximaCita)).length}</strong>Con próxima cita</div>
  </div>
  <div class="card status-legend" aria-label="Leyenda de estados de las familias">
  <h2>Qué significa cada estado</h2>
@@ -127,47 +195,51 @@ function renderListado(){
  <div class="card">
  <h2 style="margin-top:0">Datos y copias de seguridad</h2>
  <div class="actions">
- <button class="success" data-action="backup">${icon("download")} Llevar datos a otro ordenador</button>
- <button class="secondary" data-action="restore">${icon("restore")} Cargar datos en este ordenador</button>
- <input id="restore" class="hidden" type="file" accept=".json" data-restore>
- <button class="secondary" data-action="importExcel">${icon("excel")} Cargar familias desde Excel</button>
+ <button class="secondary" data-action="importExcel">${icon("excel")} Cargar Excel en este ordenador</button>
  <input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel>
  <button class="primary" data-action="exportExcel">${icon("excel")} Generar Excel</button>
  </div>
  <p class="save">El estado del guardado aparece en la parte superior de la aplicación.</p>
- <p id="backupState" class="save"></p>
- <div class="notice">Los cambios se guardan automáticamente en este ordenador. Para continuar en otro equipo, prepara un archivo de traslado y llévalo, por ejemplo, en un USB; después carga ese archivo en la otra instalación. Mantén una sola copia activa del listado para evitar ediciones distintas en cada equipo.</div>
- <div class="notice">Al cargar un Excel, las familias actuales se sustituirán por las de la hoja Listado. Usa un archivo generado con la plantilla oficial. Los Excel no se modifican.</div>
+ <div class="notice">Los cambios se guardan automáticamente en este ordenador. Para continuar en otro equipo, genera el Excel y cárgalo allí desde este apartado. Mantén una sola copia activa del listado para evitar ediciones distintas en cada equipo.</div>
+ <div class="notice">Al cargar un Excel, las familias actuales se sustituirán por las de la hoja Listado. Usa un archivo generado con la plantilla oficial. Los datos de Reparto no se importan y el archivo no se modifica.</div>
  <div class="notice">El Excel conserva las hojas Listado, Reparto y Resumen. Sus cálculos se actualizan al abrirlo en Excel o LibreOffice. La plantilla admite hasta 995 beneficiarios; Reparto y el resumen por tamaño contemplan familias de 1 a 10 miembros.</div>
  </div>`;
- filterTable();
+  filterTable();
 }
-function filterTable(){
- const q=(document.getElementById("search")?.value||"").toLowerCase().trim();
- busqueda=q;
- if (modoListado === 'personas') {
-   const all = familias.flatMap(f=>f.personas.map(p=>({f,p})));
-   const list = all.filter(({f,p})=>!q||String(f.numero).includes(q)||(p.nombre+' '+p.apellidos+' '+p.documento).toLowerCase().includes(q));
-   document.getElementById('listHead').innerHTML='<tr><th>Familia</th><th>Nombre</th><th>Apellidos</th><th>Documento</th><th>Titular</th><th>Nacimiento</th><th>Edad</th><th>Derivación</th><th>Vigencia</th><th>Próxima cita</th><th></th></tr>';
-   document.getElementById('rows').innerHTML=list.map(({f,p})=>`<tr class="click" data-action="openFamily" data-id="${esc(f.id)}"><td>${f.numero}</td><td>${esc(p.nombre)}</td><td>${esc(p.apellidos)}</td><td>${esc(p.documento)}</td><td>${p.titular?'Sí':'—'}</td><td>${fmt(p.nacimiento)}</td><td>${edad(p.nacimiento)|| (edad(p.nacimiento)===0?0:'—')}</td><td>${fmt(p.derivacion)}</td><td>${fmt(p.vigencia)}</td><td>${fmt(p.proximaCita)}</td><td><button class="secondary" data-action="openFamily" data-id="${esc(f.id)}">Editar familia</button></td></tr>`).join('')||'<tr><td colspan="11" class="empty">No se encontraron personas.</td></tr>';
-   document.getElementById('counter').textContent=`Mostrando ${list.length} de ${all.length} personas`;
-   return;
- }
- const list=familias.filter(f=>!q||String(f.numero).includes(q)||f.personas.some(p=>(p.nombre+" "+p.apellidos+" "+p.documento).toLowerCase().includes(q)));
- document.getElementById("listHead").innerHTML='<tr><th>N.º</th><th>Titular</th><th>Documento</th><th>Miembros</th><th>Vigencia más próxima</th><th>Próxima cita</th><th>Estado</th><th></th></tr>';
- document.getElementById("rows").innerHTML=list.length?list.map(f=>{
-  const titular = f.personas.find(p => p.titular) ?? f.personas[0];
-  const names = (esc(titular.nombre) + " " + esc(titular.apellidos)).trim() || "Sin datos";
-  const vig=f.personas.map(p=>p.vigencia).filter(Boolean).sort()[0], cita=f.personas.map(p=>p.proximaCita).filter(Boolean).sort()[0], [cl,tx]=estado(f);
-  return `<tr class="click" data-action="openFamily" data-id="${esc(f.id)}"><td><b>${f.numero}</b></td><td>${names}</td><td>${esc(titular.documento)||"—"}</td><td>${f.personas.length}</td><td>${fmt(vig)}</td><td>${fmt(cita)}</td><td><span class="badge ${cl}">${tx}</span></td><td><button class="secondary" data-action="openFamily" data-id="${esc(f.id)}">${icon("edit")} Editar</button></td></tr>`
- }).join(""):`<tr><td colspan="8" class="empty">No se encontraron familias.</td></tr>`;
- document.getElementById("counter").textContent=`Mostrando ${list.length} de ${familias.length} familias`;
+function filterTable() {
+  const q = (document.getElementById("search")?.value || "").toLowerCase().trim();
+  busqueda = q;
+  if (modoListado === 'personas') {
+    const all = familias.flatMap(f => f.personas.map(p => ({ f, p })));
+    const list = ordenarListado(all.filter(({ f, p }) => (!filtroEstado || estado(f)[0] === filtroEstado) && (!q || String(f.numero).includes(q) || (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q))), ({ f, p }, col) => col === 'numero' ? f.numero : col === 'edad' ? edad(p.nacimiento) : col === 'titular' ? Number(Boolean(p.titular)) : p[col]);
+    document.getElementById('listHead').innerHTML = encabezadosListado([['numero', 'Familia'], ['nombre', 'Nombre'], ['apellidos', 'Apellidos'], ['documento', 'Documento'], ['titular', 'Titular'], ['nacimiento', 'Nacimiento'], ['edad', 'Edad'], ['derivacion', 'Derivación'], ['vigencia', 'Vigencia'], ['proximaCita', 'Próxima cita']]);
+    document.getElementById('rows').innerHTML = list.map(({ f, p }) => `<tr class="click" data-action="openFamily" data-id="${esc(f.id)}"><td>${f.numero}</td><td>${esc(p.nombre)}</td><td>${esc(p.apellidos)}</td><td>${esc(p.documento)}</td><td>${p.titular ? 'Sí' : '—'}</td><td>${fmt(p.nacimiento)}</td><td>${edad(p.nacimiento) || (edad(p.nacimiento) === 0 ? 0 : '—')}</td><td>${fmt(p.derivacion)}</td><td>${fmt(p.vigencia)}</td><td>${fmt(p.proximaCita)}</td><td><button class="secondary" data-action="openFamily" data-id="${esc(f.id)}">Editar familia</button></td></tr>`).join('') || '<tr><td colspan="11" class="empty">No se encontraron personas.</td></tr>';
+    document.getElementById('counter').textContent = `Mostrando ${list.length} de ${all.length} personas`;
+    return;
+  }
+  const list = ordenarListado(familias.filter(f => (!filtroEstado || estado(f)[0] === filtroEstado) && (!q || String(f.numero).includes(q) || f.personas.some(p => (p.nombre + " " + p.apellidos + " " + p.documento).toLowerCase().includes(q)))), (f, col) => {
+    const titular = f.personas.find(p => p.titular) ?? f.personas[0];
+    if (col === 'numero') return f.numero;
+    if (col === 'nombre') return `${titular.nombre} ${titular.apellidos}`.trim();
+    if (col === 'documento') return titular.documento;
+    if (col === 'miembros') return f.personas.length;
+    if (col === 'estado') return estado(f)[1];
+    return f.personas.map(p => p[col]).filter(Boolean).sort()[0];
+  });
+  document.getElementById("listHead").innerHTML = encabezadosListado([['numero', 'N.º'], ['nombre', 'Titular'], ['documento', 'Documento'], ['miembros', 'Miembros'], ['vigencia', 'Vigencia más próxima'], ['proximaCita', 'Próxima cita'], ['estado', 'Estado']]);
+  document.getElementById("rows").innerHTML = list.length ? list.map(f => {
+    const titular = f.personas.find(p => p.titular) ?? f.personas[0];
+    const names = (esc(titular.nombre) + " " + esc(titular.apellidos)).trim() || "Sin datos";
+    const vig = f.personas.map(p => p.vigencia).filter(Boolean).sort()[0], cita = f.personas.map(p => p.proximaCita).filter(Boolean).sort()[0], [cl, tx] = estado(f);
+    return `<tr class="click" data-action="openFamily" data-id="${esc(f.id)}"><td><b>${f.numero}</b></td><td>${names}</td><td>${esc(titular.documento) || "—"}</td><td>${f.personas.length}</td><td>${fmt(vig)}</td><td>${fmt(cita)}</td><td><span class="badge ${cl}">${tx}</span></td><td><button class="secondary" data-action="openFamily" data-id="${esc(f.id)}">${icon("edit")} Editar</button></td></tr>`
+  }).join("") : `<tr><td colspan="8" class="empty">No se encontraron familias.</td></tr>`;
+  document.getElementById("counter").textContent = `Mostrando ${list.length} de ${familias.length} familias`;
 }
-async function newFamily(){const f=familia(siguienteFamilia++);familias.push(f);editando=f;vista="formulario";await changed();render()}
-function openFamily(id){editando=familias.find(f=>f.id===id);vista="formulario";render()}
-async function back(){dateDrafts.clear();editando=null;vista="listado";await changed();render()}
-async function removeFamily(){if(!confirm("¿Eliminar esta familia y todas sus personas?"))return;familias=familias.filter(f=>f.id!==editando.id);renumerar();await changed();editando=null;vista="listado";render()}
-async function addPerson(){
+async function newFamily() { const f = familia(siguienteFamilia++); familias.push(f); editando = f; vista = "formulario"; await changed(); render() }
+function openFamily(id) { editando = familias.find(f => f.id === id); vista = "formulario"; render() }
+async function back() { dateDrafts.clear(); editando = null; vista = "listado"; await changed(); render() }
+async function removeFamily() { if (!confirm("¿Eliminar esta familia y todas sus personas?")) return; familias = familias.filter(f => f.id !== editando.id); renumerar(); await changed(); editando = null; vista = "listado"; render() }
+async function addPerson() {
   const titular = editando.personas.find(person => person.titular) ?? editando.personas[0];
   const nueva = persona();
   nueva.derivacion = titular.derivacion;
@@ -176,7 +248,7 @@ async function addPerson(){
   await changed();
   render();
 }
-async function removePerson(i){if(editando.personas.length===1){alert("Una familia debe tener al menos una persona.");return}const eraTitular=editando.personas[i].titular;editando.personas.splice(i,1);if(eraTitular)editando.personas[0].titular=true;await changed();render()}
+async function removePerson(i) { if (editando.personas.length === 1) { alert("Una familia debe tener al menos una persona."); return } const eraTitular = editando.personas[i].titular; editando.personas.splice(i, 1); if (eraTitular) editando.personas[0].titular = true; await changed(); render() }
 async function updateTitular(index, checked) {
   if (!checked) {
     app.querySelector(`[data-titular][data-index="${index}"]`).checked = true;
@@ -208,13 +280,14 @@ async function updatePerson(i, k, v) {
     });
   }
   await changed();
+  renderAppointmentAlert();
 }
-function renderFormulario(){
- const f=editando;
- document.getElementById("app").innerHTML=`
+function renderFormulario() {
+  const f = editando;
+  document.getElementById("app").innerHTML = `
  <div class="card"><div class="form-head"><div><button class="secondary" data-action="back">${icon("back")} Volver al listado</button><h2>Familia ${f.numero}</h2></div><button class="danger" data-action="removeFamily">${icon("trash")} Eliminar familia</button></div>
  <p style="color:#666">Rellene únicamente los datos de las personas. La edad y el número de miembros se calculan automáticamente. Escriba las fechas como día/mes/año (por ejemplo, 15/06/1967) o use el botón de calendario. Las fechas de derivación y vigencia son comunes a la familia: edítelas en la persona titular. En los demás miembros se muestran como referencia.</p></div>
- <div class="card">${f.personas.map((p,i)=>`
+ <div class="card">${f.personas.map((p, i) => `
  <div class="person" data-person="${i}"><div class="person-head"><div><h3>${p.titular ? "Titular" : `Miembro ${i + 1}`}</h3><label class="titular-toggle"><input type="checkbox" data-titular data-index="${i}" ${p.titular ? "checked" : ""}> Es titular</label></div><button class="danger" data-action="removePerson" data-index="${i}">${icon("trash")} Eliminar persona</button></div>
  <div class="grid">
  <div><label>Nombre</label><input value="${esc(p.nombre)}" data-field="nombre" data-index="${i}"></div>
@@ -229,54 +302,17 @@ function renderFormulario(){
  <div class="actions"><button class="secondary" data-action="addPerson">${icon("add")} Añadir persona</button><button class="primary" data-action="back">Guardar y volver</button></div></div>`;
 }
 
-async function applyTransferredFamilies(data) {
-  const restored = data.familias;
-  const count = restored.reduce((sum, family) => sum + family.personas.length, 0);
-  if (!confirm(`Se cargarán ${restored.length} familias y ${count} beneficiarios, sustituyendo los datos actuales de este ordenador. ¿Continuar?`)) return;
-  normalizeTitulares(restored);
-  setSaveState("Cargando datos y guardando…", "saving");
-  await saveDB(restored);
-  await saveReparto(data.reparto);
-  reparto = alimentos.map((nombre,i)=>data.reparto[i] ?? {nombre,cantidad:""});
-  familias = restored;
-  siguienteFamilia = Math.max(0, ...familias.map(f => f.numero)) + 1;
-  editando = null;
-  vista = "listado";
-  render();
-  setSaveState(`Datos cargados: ${familias.length} familias.`, "saved");
-}
-
-async function restoreFile(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  try {
-    await applyTransferredFamilies(await readBackup(file));
-  } catch (error) {
-    console.error(error);
-    alert(`No se pudo cargar el archivo. ${error.message}`);
-  } finally {
-    event.target.value = "";
-  }
-}
-
-async function transferOut() {
-  const saved = await saveTransfer(familias, siguienteFamilia, reparto);
-  if (!saved && !isTauri()) backup(familias, siguienteFamilia, reparto);
-  else if (saved) alert("Archivo de traslado guardado. Llévelo al otro ordenador y use «Cargar datos en este ordenador».");
-}
-async function transferIn() {
-  if (!isTauri()) return document.getElementById("restore").click();
-  const imported = await loadTransfer();
-  if (imported) await applyTransferredFamilies(imported);
-}
-
 async function importExcelFile(event) {
   const file = event.target.files[0];
   if (!file) return;
   try {
     const imported = await readExcel(file);
     const count = imported.reduce((sum, family) => sum + family.personas.length, 0);
-    if (!confirm(`Se han encontrado ${imported.length} familias y ${count} beneficiarios. Se sustituirán los datos actuales de la aplicación. ¿Continuar?`)) return;
+    const issues = imported.issues ?? [];
+    const detail = issues.length
+      ? `\n\nSe omitirán ${issues.length} fila${issues.length === 1 ? "" : "s"}:\n${issues.slice(0, 12).map(issue => `• Fila ${issue.row}: ${issue.reason}`).join("\n")}${issues.length > 12 ? `\n• Y ${issues.length - 12} más.` : ""}`
+      : "";
+    if (!confirm(`Se han encontrado ${imported.length} familias y ${count} beneficiarios válidos.${detail}\n\nSe sustituirán los datos actuales de la aplicación. ¿Continuar?`)) return;
     normalizeTitulares(imported);
     setSaveState("Importando Excel y guardando…", "saving");
     await saveDB(imported);
@@ -285,7 +321,7 @@ async function importExcelFile(event) {
     editando = null;
     vista = "listado";
     render();
-    setSaveState(`Importación completada: ${familias.length} familias guardadas.`, "saved");
+    setSaveState(`Importación completada: ${familias.length} familias y ${count} personas guardadas${issues.length ? `; ${issues.length} filas omitidas` : ""}.`, "saved");
   } catch (error) {
     console.error(error);
     alert(`No se pudo importar el Excel. ${error.message}`);
@@ -304,11 +340,12 @@ const app = document.getElementById("app");
 const actions = {
   newFamily, back, removeFamily, addPerson,
   reload: () => location.reload(),
-  section: target => {vista = target.dataset.view; render();},
-  listMode: target => {modoListado=target.dataset.mode; renderListado();},
+  section: target => { vista = target.dataset.view; render(); },
+  sortColumn: target => { const orden = ordenListado[modoListado]; orden.direccion = orden.columna === target.dataset.column ? -orden.direccion : 1; orden.columna = target.dataset.column; filterTable(); },
+  listMode: target => { modoListado = target.dataset.mode; renderListado(); renderAppointmentAlert(); requestAnimationFrame(updatePageNav); },
+  exportSummary,
   openFamily: target => openFamily(target.dataset.id),
   removePerson: target => removePerson(Number(target.dataset.index)),
-  backup: transferOut,
   exportExcel: async target => {
     target.disabled = true;
     target.textContent = "Generando Excel…";
@@ -324,7 +361,6 @@ const actions = {
       target.textContent = "Generar Excel";
     }
   },
-  restore: transferIn,
   importExcel: () => document.getElementById("importExcel").click(),
   datePicker: target => {
     const picker = document.getElementById(target.dataset.pickerId);
@@ -339,19 +375,23 @@ app.addEventListener("click", async event => {
   if (!target || !app.contains(target)) return;
   try { await actions[target.dataset.action]?.(target); } catch (error) { reportError(error); }
 });
+document.getElementById('pageUp').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+document.getElementById('pageDown').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
+window.addEventListener('scroll', updatePageNav, { passive: true });
+window.addEventListener('resize', updatePageNav);
 app.addEventListener("input", async event => {
   const target = event.target;
   if (target.hasAttribute('data-food-name') || target.hasAttribute('data-food-amount')) {
     const index = Number(target.dataset.foodName ?? target.dataset.foodAmount);
-    if (target.hasAttribute('data-food-name')) reparto[index].nombre=target.value;
+    if (target.hasAttribute('data-food-name')) reparto[index].nombre = target.value;
     else {
       if (!target.validity.valid || (target.value !== '' && !Number.isFinite(Number(target.value)))) return;
-      reparto[index].cantidad=target.value===''?'':Number(target.value);
-      const r=resumen(familias), total=r.tamanos.reduce((n,c,i)=>n+c*(i+1),0);
-      r.tamanos.forEach((n,j)=>app.querySelector(`[data-result="${index}:${j}"]`).textContent=envases(reparto[index].cantidad,j+1,n,total)??'—');
+      reparto[index].cantidad = target.value === '' ? '' : Number(target.value);
+      const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
+      r.tamanos.forEach((n, j) => app.querySelector(`[data-result="${index}:${j}"]`).textContent = envases(reparto[index].cantidad, j + 1, n, total) ?? '—');
     }
-    setSaveState('Guardando reparto…','saving');
-    try {await saveReparto(reparto); setSaveState('Reparto guardado.');} catch(error) {reportError(error);}
+    setSaveState('Guardando reparto…', 'saving');
+    try { await saveReparto(reparto); setSaveState('Reparto guardado.'); } catch (error) { reportError(error); }
     return;
   }
   if (target.hasAttribute("data-search")) return filterTable();
@@ -382,12 +422,12 @@ app.addEventListener("input", async event => {
 });
 app.addEventListener("change", async event => {
   const target = event.target;
+  if (target.hasAttribute("data-state-filter")) { filtroEstado = target.value; filterTable(); return; }
   if (target.hasAttribute("data-titular")) {
     try { await updateTitular(Number(target.dataset.index), target.checked); }
     catch (error) { reportError(error); }
     return;
   }
-  if (target.hasAttribute("data-restore")) return restoreFile(event);
   if (target.hasAttribute("data-import-excel")) return importExcelFile(event);
   if (!target.dataset.field || target.type !== "date") return;
   if (!target.validity.valid) return;
@@ -412,7 +452,7 @@ async function init() {
   try {
     familias = await loadDB();
     const savedReparto = await loadReparto();
-    reparto = alimentos.map((nombre,i)=>savedReparto[i] ?? {nombre,cantidad:""});
+    reparto = alimentos.map((nombre, i) => savedReparto[i] ?? { nombre, cantidad: "" });
     if (normalizeTitulares(familias)) await saveDB(familias);
     siguienteFamilia = Math.max(0, ...familias.map(f => f.numero)) + 1;
     render();
@@ -425,7 +465,7 @@ async function init() {
       const persistent = await navigator.storage?.persist?.().catch(() => false);
       if (storageStatus) storageStatus.textContent = persistent
         ? "Almacenamiento local persistente concedido por el navegador."
-        : "Datos guardados en este navegador. Descarga copias JSON periódicamente.";
+        : "Datos guardados en este navegador. Genera y conserva el Excel para tener una copia trasladable.";
     }
   } catch (error) {
     console.error(error);

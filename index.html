@@ -6,8 +6,9 @@
   <title>Gestor de beneficiarios</title>
 </head>
 <body>
-  <header><h1>Gestor de beneficiarios</h1><p>Aplicación local · prototipo de trabajo</p><p id="storageState" role="status" aria-live="polite">Comprobando almacenamiento…</p><p id="saveState" role="status" aria-live="polite" data-status="saved">Comprobando guardado…</p></header>
+  <header><div class="header-row"><div class="header-info"><h1>Gestor de beneficiarios</h1><p>Aplicación local · prototipo de trabajo</p><p id="storageState" role="status" aria-live="polite">Comprobando almacenamiento…</p><p id="saveState" role="status" aria-live="polite" data-status="saved">Comprobando guardado…</p></div><img class="company-logo" src="./bancoteide_logo_blanco.png" alt="Banco de Alimentos de Tenerife" /></div><div id="appointmentAlert" class="appointment-alert" role="alert" aria-live="assertive" hidden></div></header>
   <main id="app"></main>
+  <div class="page-nav" aria-label="Navegación por la página"><button id="pageUp" type="button" title="Subir al principio" aria-label="Subir al principio de la página" hidden>↑</button><button id="pageDown" type="button" title="Bajar al final" aria-label="Bajar al final de la página" hidden>↓</button></div>
   <script type="module" src="/src/app.js"></script>
 </body>
 </html>

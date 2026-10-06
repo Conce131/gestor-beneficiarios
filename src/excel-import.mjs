@@ -67,6 +67,7 @@ export function importWorkbook(bytes) {
   }
 
   const families = [];
+  const issues = [];
   let current = null;
   const seenNumbers = new Set();
   for (const row of rows) {
@@ -79,34 +80,52 @@ export function importWorkbook(bytes) {
     if (numberValue) {
       const number = Number(numberValue);
       if (!Number.isSafeInteger(number) || number < 1 || seenNumbers.has(number)) {
-        throw new Error(`El número de familia en la fila ${rowNumber} no es válido o está repetido.`);
+        issues.push({ row: rowNumber, reason: `número de familia «${numberValue}» no válido o repetido` });
+        current = null;
+        continue;
       }
       current = { id: crypto.randomUUID(), numero: number, personas: [] };
       families.push(current);
       seenNumbers.add(number);
     } else if (!current) {
-      throw new Error(`Hay un beneficiario sin número de familia en la fila ${rowNumber}.`);
+      issues.push({ row: rowNumber, reason: "falta el número de familia" });
+      continue;
     }
     const birth = values.get(5)?.trim() ?? "";
     const referral = values.get(7)?.trim() ?? "";
     const expiry = values.get(8)?.trim() ?? "";
     const appointment = values.get(11)?.trim() ?? "";
+    const invalidDate = [birth, referral, expiry, appointment].some(value => value && !serialDate(value));
+    const nombre = values.get(2)?.trim() ?? "";
+    const apellidos = values.get(3)?.trim() ?? "";
+    const documento = values.get(4)?.trim() ?? "";
+    if (invalidDate) {
+      issues.push({ row: rowNumber, reason: "contiene una fecha no válida" });
+      continue;
+    }
+    const missing = [!nombre && "nombre", !apellidos && "apellidos", !documento && "documento"].filter(Boolean);
+    if (missing.length) {
+      issues.push({ row: rowNumber, reason: `falta ${missing.join(", ")}` });
+      continue;
+    }
     const person = {
       id: crypto.randomUUID(),
       titular: current.personas.length === 0,
-      nombre: values.get(2)?.trim() ?? "",
-      apellidos: values.get(3)?.trim() ?? "",
-      documento: values.get(4)?.trim() ?? "",
+      nombre,
+      apellidos,
+      documento,
       nacimiento: birth ? serialDate(birth) : "",
       derivacion: referral ? serialDate(referral) : "",
       vigencia: expiry ? serialDate(expiry) : "",
       proximaCita: appointment ? serialDate(appointment) : "",
     };
-    if ([birth, referral, expiry, appointment].some(value => value && !serialDate(value))) {
-      throw new Error(`La fecha de la fila ${rowNumber} no es válida.`);
-    }
     current.personas.push(person);
   }
-  if (!families.length) throw new Error("No se encontraron beneficiarios en la hoja Listado.");
-  return families;
+  const validFamilies = families.filter(family => family.personas.length);
+  if (!validFamilies.length) {
+    const detail = issues.length ? ` Filas revisadas: ${issues.map(issue => `${issue.row} (${issue.reason})`).join("; ")}.` : "";
+    throw new Error(`No se encontraron beneficiarios válidos en la hoja Listado.${detail}`);
+  }
+  Object.defineProperty(validFamilies, "issues", { value: issues });
+  return validFamilies;
 }

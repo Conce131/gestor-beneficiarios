@@ -64,6 +64,22 @@ export function buildWorkbook(templateBytes, familias, reparto) {
       for (const [column, field] of [["F", "nacimiento"], ["H", "derivacion"], ["I", "vigencia"], ["L", "proximaCita"]]) {
         write(`${column}${row}`, excelDate(person[field]));
       }
+      // Conserva la fórmula de miembros y proporciona su resultado para los
+      // visores que muestran el archivo sin recalcularlo al abrirlo.
+      const membersCell = cells.get(`K${row}`);
+      if (!membersCell) throw new Error(`Falta la celda K${row} en la plantilla.`);
+      let membersValue = membersCell.getElementsByTagNameNS(NS, "v")[0];
+      if (!membersValue) {
+        membersValue = sheet.createElementNS(NS, "v");
+        membersCell.appendChild(membersValue);
+      }
+      if (index === 0) {
+        membersCell.removeAttribute("t");
+        membersValue.textContent = String(family.personas.length);
+      } else {
+        membersCell.setAttribute("t", "str");
+        membersValue.textContent = "";
+      }
       // G, J y K mantienen las fórmulas oficiales, también en filas vacías.
       row++;
     }

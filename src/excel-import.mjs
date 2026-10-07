@@ -16,9 +16,20 @@ function columnIndex(reference) {
   return [...letters].reduce((sum, letter) => sum * 26 + letter.charCodeAt(0) - 64, 0) - 1;
 }
 
-function serialDate(value) {
-  const serial = Number(value);
-  if (!Number.isFinite(serial) || serial <= 0 || serial > 2958465) return "";
+export function parseExcelDate(value) {
+  const text = String(value ?? '').trim().replace(/^['’]\s*/, '').trim();
+  if (!text) return '';
+  const written = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
+  if (written) {
+    const [, dayText, monthText, yearText] = written;
+    const day = Number(dayText), month = Number(monthText), year = Number(yearText);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (year < 1900 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+    return `${yearText}-${monthText.padStart(2, '0')}-${dayText.padStart(2, '0')}`;
+  }
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
+  const serial = Number(text);
+  if (!Number.isFinite(serial) || serial <= 0 || serial > 2958465) return null;
   // Excel incluye el inexistente 29/02/1900 en su calendario histórico.
   const epoch = serial >= 60 ? Date.UTC(1899, 11, 30) : Date.UTC(1899, 11, 31);
   const date = new Date(epoch + Math.floor(serial) * 86400000);
@@ -96,7 +107,8 @@ export function importWorkbook(bytes) {
     const referral = values.get(7)?.trim() ?? "";
     const expiry = values.get(8)?.trim() ?? "";
     const appointment = values.get(11)?.trim() ?? "";
-    const invalidDate = [birth, referral, expiry, appointment].some(value => value && !serialDate(value));
+    const parsedDates = [birth, referral, expiry, appointment].map(parseExcelDate);
+    const invalidDate = parsedDates.some((value, index) => [birth, referral, expiry, appointment][index] && value === null);
     const nombre = values.get(2)?.trim() ?? "";
     const apellidos = values.get(3)?.trim() ?? "";
     const documento = values.get(4)?.trim() ?? "";
@@ -115,10 +127,10 @@ export function importWorkbook(bytes) {
       nombre,
       apellidos,
       documento,
-      nacimiento: birth ? serialDate(birth) : "",
-      derivacion: referral ? serialDate(referral) : "",
-      vigencia: expiry ? serialDate(expiry) : "",
-      proximaCita: appointment ? serialDate(appointment) : "",
+      nacimiento: parsedDates[0] || "",
+      derivacion: parsedDates[1] || "",
+      vigencia: parsedDates[2] || "",
+      proximaCita: parsedDates[3] || "",
     };
     current.personas.push(person);
   }

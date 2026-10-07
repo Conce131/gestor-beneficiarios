@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { DOMParser, XMLSerializer } from "@xmldom/xmldom";
-import { importWorkbook } from "../src/excel-import.mjs";
+import { importWorkbook, parseExcelDate } from "../src/excel-import.mjs";
 import { buildWorkbook } from "../src/excel-workbook.mjs";
 
 globalThis.DOMParser = DOMParser;
@@ -12,6 +12,15 @@ const families = [
   { numero: 2, personas: [{ nombre: "Ana", apellidos: "Prueba", documento: "001234", nacimiento: "2000-01-01", derivacion: "2026-10-05", vigencia: "2027-04-05", proximaCita: "" }] },
   { numero: 5, personas: [{ nombre: "Luis", apellidos: "Ficticio", documento: "DOC-2", nacimiento: "1900-01-01", derivacion: "", vigencia: "", proximaCita: "2026-11-01" }, { nombre: "Eva", apellidos: "Ficticia", documento: "DOC-3", nacimiento: "", derivacion: "", vigencia: "", proximaCita: "" }] },
 ];
+
+test('lee fechas DD/MM/AAAA con apóstrofo de Excel, y valida el calendario y los cuatro dígitos del año', () => {
+  assert.equal(parseExcelDate("'12/12/2012"), '2012-12-12');
+  assert.equal(parseExcelDate(' 1/2/2001 '), '2001-02-01');
+  assert.equal(parseExcelDate('12/12/121212'), null);
+  assert.equal(parseExcelDate('31/02/2020'), null);
+  assert.equal(parseExcelDate(''), '');
+  assert.equal(parseExcelDate('46302'), '2026-10-07');
+});
 
 test("importa familias y miembros desde la hoja Listado de la plantilla", () => {
   const excel = buildWorkbook(template, families);

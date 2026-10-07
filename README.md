@@ -1,5 +1,11 @@
 # Gestor de Beneficiarios para Entidades
 
+## Versión 1.2.1
+
+- La importación acepta fechas de Excel como fecha numérica o como texto `DD/MM/AAAA`,
+  incluso con apóstrofo inicial o espacios. Rechaza fechas imposibles y años que no
+  tengan cuatro cifras.
+
 ## Versión 1.2.0
 
 - Interfaz del listado más despejada, botones con mayor contraste y controles homogéneos.

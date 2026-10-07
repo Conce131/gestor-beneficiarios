@@ -1,6 +1,6 @@
 {
   "name": "gestor-beneficiarios",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Aplicación web local y offline para facilitar la gestión de familias y beneficiarios por parte de entidades colaboradoras de un banco de alimentos.",
   "main": "index.js",
   "scripts": {

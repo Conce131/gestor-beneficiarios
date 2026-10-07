@@ -6,6 +6,8 @@ src-tauri/gen/schemas/
 
 # Paquetes y datos locales de prueba; se generan para cada prueba de instalación.
 /GestorBeneficiarios-1.0.0-Windows-setup.exe
+/GestorBeneficiarios-*-Windows-setup.exe
+/GestorBeneficiarios-*-Windows.zip
 /GestorBeneficiarios-instalador-Windows.zip
 /GestorBeneficiarios-prueba-Windows-x64.zip
 /INSTRUCCIONES-PRUEBA-WINDOWS.txt

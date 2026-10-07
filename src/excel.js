@@ -17,8 +17,10 @@ export async function exportExcel(familias, reparto) {
     });
     if (!path) return false;
     await writeFile(path, bytes);
-    await openPath(path);
-    return true;
+    let opened = true;
+    try { await openPath(path); }
+    catch (error) { console.error('El Excel se guardó, pero no pudo abrirse.', error); opened = false; }
+    return { path, opened };
   }
   const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);

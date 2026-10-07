@@ -75,12 +75,13 @@ export function importWorkbook(bytes) {
     if (rowNumber < 2) continue;
     const values = new Map(Array.from(row.getElementsByTagNameNS(NS, "c"), cell => [columnIndex(cell.getAttribute("r")), cellValue(cell, sharedStrings)]));
     const numberValue = values.get(0)?.trim();
+    const referencia = { familia: numberValue || current?.numero || '', nombre: values.get(2)?.trim() ?? '', apellidos: values.get(3)?.trim() ?? '' };
     const hasData = [1, 2, 3, 4, 5, 7, 8, 11].some(index => values.get(index)?.trim());
     if (!hasData) continue;
     if (numberValue) {
       const number = Number(numberValue);
       if (!Number.isSafeInteger(number) || number < 1 || seenNumbers.has(number)) {
-        issues.push({ row: rowNumber, reason: `número de familia «${numberValue}» no válido o repetido` });
+        issues.push({ ...referencia, row: rowNumber, reason: `número de familia «${numberValue}» no válido o repetido` });
         current = null;
         continue;
       }
@@ -88,7 +89,7 @@ export function importWorkbook(bytes) {
       families.push(current);
       seenNumbers.add(number);
     } else if (!current) {
-      issues.push({ row: rowNumber, reason: "falta el número de familia" });
+      issues.push({ ...referencia, row: rowNumber, reason: "falta el número de familia" });
       continue;
     }
     const birth = values.get(5)?.trim() ?? "";
@@ -100,12 +101,12 @@ export function importWorkbook(bytes) {
     const apellidos = values.get(3)?.trim() ?? "";
     const documento = values.get(4)?.trim() ?? "";
     if (invalidDate) {
-      issues.push({ row: rowNumber, reason: "contiene una fecha no válida" });
+      issues.push({ ...referencia, row: rowNumber, reason: "contiene una fecha no válida" });
       continue;
     }
     const missing = [!nombre && "nombre", !apellidos && "apellidos", !documento && "documento"].filter(Boolean);
     if (missing.length) {
-      issues.push({ row: rowNumber, reason: `falta ${missing.join(", ")}` });
+      issues.push({ ...referencia, row: rowNumber, reason: `falta ${missing.join(", ")}` });
       continue;
     }
     const person = {

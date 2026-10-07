@@ -1,5 +1,22 @@
 # Gestor de Beneficiarios para Entidades
 
+## Versión 1.2.0
+
+- Interfaz del listado más despejada, botones con mayor contraste y controles homogéneos.
+- Búsqueda exacta por número de familia, separada de nombres y documentos.
+- Filtro de vigencias caducadas al pulsar el cuadro «Caducadas»; otra pulsación lo desactiva.
+- Validación de todos los miembros antes de guardar, con una lista de campos pendientes.
+  El titular necesita nombre, apellidos y documento. Los otros adultos necesitan nombre
+  y apellidos; su documento es opcional. Los menores pueden omitir su identidad,
+  pero necesitan una fecha de nacimiento válida que confirme que son menores.
+- Los miembros incompletos quedan pendientes y no aumentan el recuento guardado.
+- Aviso de Excel generado con su ubicación e informe persistente de la última importación,
+  incluyendo las filas omitidas y sus motivos.
+- Columnas de miembros centradas en Reparto y edición de familias pulsando la fila.
+
+La selección de una carpeta habitual y la importación arrastrando archivos siguen pendientes.
+El instalador de esta versión se genera para Windows de 64 bits.
+
 Aplicación web local y offline para facilitar la gestión de familias y beneficiarios por parte de entidades colaboradoras de un banco de alimentos.
 
 ## 1. Objetivo del proyecto

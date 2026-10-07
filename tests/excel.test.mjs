@@ -36,7 +36,7 @@ test('conserva todas las partes excepto Listado y propiedades de recálculo', ()
   assert.equal(after.get('A4').textContent, '2');
   assert.equal(after.get('B4').textContent, '3');
   assert.equal(after.get('C2').getAttribute('t'), 'inlineStr');
-  assert.equal(after.get('C2').textContent, person.nombre);
+  assert.equal(after.get('C2').textContent, '=texto Ficticio & <prueba>');
   assert.equal(after.get('E2').textContent, '00123-FICTICIO');
   assert.equal(after.get('F2').textContent, '36526');
   assert.equal(after.get('L2').textContent, '');

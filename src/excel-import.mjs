@@ -17,7 +17,7 @@ function columnIndex(reference) {
 }
 
 export function parseExcelDate(value) {
-  const text = String(value ?? '').trim().replace(/^['’]\s*/, '').trim();
+  const text = String(value ?? '').trim().replace(/^['’]\s*/, '').trim().replace(/\/{2,}/g, '/');
   if (!text) return '';
   const written = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(text);
   if (written) {
@@ -27,6 +27,7 @@ export function parseExcelDate(value) {
     if (year < 1900 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
     return `${yearText}-${monthText.padStart(2, '0')}-${dayText.padStart(2, '0')}`;
   }
+  if (text === '0' || text === '0.0') return '';
   if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
   const serial = Number(text);
   if (!Number.isFinite(serial) || serial <= 0 || serial > 2958465) return null;
@@ -79,6 +80,7 @@ export function importWorkbook(bytes) {
 
   const families = [];
   const issues = [];
+  const warnings = [];
   let current = null;
   const seenNumbers = new Set();
   for (const row of rows) {
@@ -106,7 +108,11 @@ export function importWorkbook(bytes) {
     const birth = values.get(5)?.trim() ?? "";
     const referral = values.get(7)?.trim() ?? "";
     const expiry = values.get(8)?.trim() ?? "";
-    const appointment = values.get(11)?.trim() ?? "";
+    let appointment = values.get(11)?.trim() ?? "";
+    if (appointment.toLocaleUpperCase('es') === 'REVISAR') {
+      warnings.push({ ...referencia, row: rowNumber, reason: 'la celda Próxima Cita contiene «REVISAR»; se dejó vacía' });
+      appointment = '';
+    }
     const parsedDates = [birth, referral, expiry, appointment].map(parseExcelDate);
     const invalidDate = parsedDates.some((value, index) => [birth, referral, expiry, appointment][index] && value === null);
     const nombre = values.get(2)?.trim() ?? "";
@@ -116,7 +122,9 @@ export function importWorkbook(bytes) {
       issues.push({ ...referencia, row: rowNumber, reason: "contiene una fecha no válida" });
       continue;
     }
-    const missing = [!nombre && "nombre", !apellidos && "apellidos", !documento && "documento"].filter(Boolean);
+    const birthDate = parsedDates[0] || '';
+    const minor = !current.personas.length ? false : esMenor(birthDate);
+    const missing = [!nombre && !minor && "nombre", !apellidos && !minor && "apellidos", !documento && !current.personas.length && "documento"].filter(Boolean);
     if (missing.length) {
       issues.push({ ...referencia, row: rowNumber, reason: `falta ${missing.join(", ")}` });
       continue;
@@ -127,7 +135,7 @@ export function importWorkbook(bytes) {
       nombre,
       apellidos,
       documento,
-      nacimiento: parsedDates[0] || "",
+      nacimiento: birthDate,
       derivacion: parsedDates[1] || "",
       vigencia: parsedDates[2] || "",
       proximaCita: parsedDates[3] || "",
@@ -140,5 +148,14 @@ export function importWorkbook(bytes) {
     throw new Error(`No se encontraron beneficiarios válidos en la hoja Listado.${detail}`);
   }
   Object.defineProperty(validFamilies, "issues", { value: issues });
+  Object.defineProperty(validFamilies, "warnings", { value: warnings });
   return validFamilies;
+}
+
+function esMenor(value, hoy = new Date()) {
+  if (!value) return false;
+  const nacimiento = new Date(`${value}T00:00:00`);
+  let edad = hoy.getFullYear() - nacimiento.getFullYear();
+  if (hoy.getMonth() < nacimiento.getMonth() || (hoy.getMonth() === nacimiento.getMonth() && hoy.getDate() < nacimiento.getDate())) edad--;
+  return edad >= 0 && edad < 18;
 }

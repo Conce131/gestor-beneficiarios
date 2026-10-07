@@ -15,6 +15,8 @@ const families = [
 
 test('lee fechas DD/MM/AAAA con apóstrofo de Excel, y valida el calendario y los cuatro dígitos del año', () => {
   assert.equal(parseExcelDate("'12/12/2012"), '2012-12-12');
+  assert.equal(parseExcelDate('15//5/2026'), '2026-05-15');
+  assert.equal(parseExcelDate('0'), '');
   assert.equal(parseExcelDate(' 1/2/2001 '), '2001-02-01');
   assert.equal(parseExcelDate('12/12/121212'), null);
   assert.equal(parseExcelDate('31/02/2020'), null);

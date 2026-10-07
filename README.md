@@ -1,5 +1,11 @@
 # Gestor de Beneficiarios para Entidades
 
+## Versión 1.2.2
+
+- Corrige la importación de fechas con separadores repetidos y ceros de fórmula.
+- Permite omitir el documento en miembros no titulares, conserva las filas y registra
+  «REVISAR» en Próxima Cita como aviso informativo.
+
 ## Versión 1.2.1
 
 - La importación acepta fechas de Excel como fecha numérica o como texto `DD/MM/AAAA`,

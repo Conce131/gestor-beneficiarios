@@ -58,6 +58,14 @@ test('rechaza fechas imposibles y conserva fechas sin desfase horario', () => {
   assert.equal(data.get('F2').textContent, '1');
 });
 
+test('exporta MENOR como nombre cuando un menor no tiene nombre', () => {
+  const data = cells(unzipSync(buildWorkbook(template, [{ numero: 1, personas: [
+    { ...person, nombre: '', apellidos: '', documento: '', menor: true, nacimiento: '2015-04-03' },
+  ] }]))['xl/worksheets/sheet1.xml']);
+  assert.equal(data.get('C2').textContent, 'MENOR');
+  assert.equal(data.get('D2').textContent, '');
+});
+
 test('exporta nombres y cantidades de Reparto conservando las fórmulas oficiales', () => {
   const output = unzipSync(buildWorkbook(template, families, [{nombre:'Producto de prueba',cantidad:12.5}]));
   const before = cells(original['xl/worksheets/sheet2.xml']);

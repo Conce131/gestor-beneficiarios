@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "gestor-beneficiarios"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "tauri",
  "tauri-build",

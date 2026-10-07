@@ -71,7 +71,7 @@ export function buildWorkbook(templateBytes, familias, reparto) {
     for (const [index, person] of family.personas.entries()) {
       write(`A${row}`, index === 0 ? family.numero : null);
       write(`B${row}`, beneficiary++);
-      write(`C${row}`, excelName(person.nombre), true);
+      write(`C${row}`, person.menor && !String(person.nombre ?? "").trim() ? "MENOR" : excelName(person.nombre), true);
       write(`D${row}`, excelName(person.apellidos), true);
       write(`E${row}`, String(person.documento ?? "").trim().toLocaleUpperCase("es-ES"), true);
       for (const [column, field] of [["F", "nacimiento"], ["H", "derivacion"], ["I", "vigencia"], ["L", "proximaCita"]]) {

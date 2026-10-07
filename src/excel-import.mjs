@@ -132,6 +132,7 @@ export function importWorkbook(bytes) {
     const person = {
       id: crypto.randomUUID(),
       titular: current.personas.length === 0,
+      menor: minor,
       nombre,
       apellidos,
       documento,

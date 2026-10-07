@@ -37,6 +37,16 @@ test("importa familias y miembros desde la hoja Listado de la plantilla", () => 
   assert.notEqual(imported[0].id, families[0].id);
 });
 
+test('detecta y marca como menor a una persona importada por su fecha de nacimiento', () => {
+  const libro = buildWorkbook(template, [{ numero: 8, personas: [
+    { nombre: 'Titular', apellidos: 'Prueba', documento: 'ID-8', nacimiento: '1980-01-01' },
+    { nombre: '', apellidos: '', documento: '', nacimiento: '2015-04-03' },
+  ] }]);
+  const imported = importWorkbook(libro);
+  assert.equal(imported[0].personas[1].menor, true);
+  assert.equal(imported[0].personas[1].nombre, '');
+});
+
 test("rechaza un archivo sin la estructura de la plantilla", () => {
   assert.throws(() => importWorkbook(new Uint8Array([1, 2, 3])), /Excel/);
 });

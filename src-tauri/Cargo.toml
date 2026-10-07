@@ -1,6 +1,6 @@
 [package]
 name = "gestor-beneficiarios"
-version = "1.2.2"
+version = "1.2.3"
 description = "Gestor local de familias y beneficiarios"
 edition = "2021"
 

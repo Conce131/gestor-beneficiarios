@@ -1,5 +1,10 @@
 # Gestor de Beneficiarios para Entidades
 
+## Versión 1.2.3
+
+- Detecta menores automáticamente por fecha de nacimiento y los marca en el formulario.
+- Exporta «MENOR» como nombre cuando el menor no tiene nombre registrado.
+
 ## Versión 1.2.2
 
 - Corrige la importación de fechas con separadores repetidos y ceros de fórmula.

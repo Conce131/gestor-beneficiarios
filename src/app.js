@@ -435,7 +435,7 @@ async function updatePerson(i, k, v) {
     app.querySelectorAll(`[data-shared-date="${k}"]`).forEach(input => input.value = displayDate(v));
   } else {
     editando.personas[i][k] = v;
-    if (k === "nacimiento" && v) {
+    if (k === "nacimiento") {
       editando.personas[i].menor = !editando.personas[i].titular && typeof edad(v) === "number" && edad(v) < 18;
       const checkbox = app.querySelector(`[data-menor][data-index="${i}"]`);
       if (checkbox) checkbox.checked = editando.personas[i].menor;

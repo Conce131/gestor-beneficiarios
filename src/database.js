@@ -57,6 +57,19 @@ export async function saveDB(familias) {
   return write;
 }
 
+export async function resetDB() {
+  await desktopWriteQueue;
+  if (!isTauri()) return saveBrowserDB([]);
+  const store = await getDesktopStore();
+  const recovery = await getDesktopStore("familias-recuperacion.json");
+  await store.set("familias", []);
+  await store.save();
+  await recovery.set("familias", []);
+  await recovery.save();
+  // Borra también el almacén antiguo para que no se migre al abrir de nuevo.
+  await saveBrowserDB([]);
+}
+
 export async function loadDB() {
   if (!isTauri()) return loadBrowserDB();
   try {

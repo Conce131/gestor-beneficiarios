@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { editarPersona, eliminarMiembro, restaurarMiembro } from '../src/edicion-listado.mjs';
+import { datosPendientesFamilia } from '../src/validacion.mjs';
 
 const hoy = new Date('2026-10-07T12:00:00');
 const familia = { id: 'f', numero: 42, personas: [
@@ -22,11 +23,16 @@ test('cambiar vigencia desde un miembro actualiza toda la familia', () => {
   assert.equal(familia.personas[0].vigencia, '2027-01-01');
 });
 
-test('impide guardar datos incompletos o fechas imposibles sin alterar la familia', () => {
-  assert.throws(() => editarPersona(familia, 'a', 'documento', '', hoy), /Completa documento/);
+test('guarda datos incompletos y mantiene la validación de fechas imposibles', () => {
+  const incompleta = editarPersona(familia, 'a', 'documento', '', hoy);
+  assert.equal(incompleta.personas[0].documento, '');
+  assert.deepEqual(datosPendientesFamilia(incompleta, hoy)[0].campos, ['documento']);
+  assert.equal(familia.personas[0].documento, 'FICTICIO');
   assert.throws(() => editarPersona(familia, 'a', 'nacimiento', '2026-02-30', hoy), /fecha válida/);
   assert.throws(() => editarPersona(familia, 'a', 'nacimiento', '2027-01-01', hoy), /futura/);
-  assert.throws(() => editarPersona(familia, 'b', 'nacimiento', '2000-01-01', hoy), /Completa nombre/);
+  const adulto = editarPersona(familia, 'b', 'nacimiento', '2000-01-01', hoy);
+  assert.equal(adulto.personas[1].menor, false);
+  assert.deepEqual(datosPendientesFamilia(adulto, hoy)[0].campos, ['nombre', 'apellidos']);
   assert.throws(() => editarPersona(familia, 'a', 'numero', 1, hoy), /no se puede editar/);
   assert.equal(familia.numero, 42);
 });

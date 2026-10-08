@@ -1,4 +1,4 @@
-export function erroresFamilia(familia, hoy = new Date()) {
+export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos = false } = {}) {
   const errores = [];
   const personas = familia.personas ?? [];
   if (!personas.length || personas.filter(p => p.titular).length !== 1) {
@@ -7,13 +7,16 @@ export function erroresFamilia(familia, hoy = new Date()) {
   for (const [indice, persona] of personas.entries()) {
     const error = (campo, mensaje) => errores.push({ indice, campo, mensaje });
     const menor = persona.menor && !persona.titular;
-    if (!menor) {
+    if (!permitirIncompletos && !menor) {
       for (const [campo, etiqueta] of [['nombre', 'nombre'], ['apellidos', 'apellidos'], ['documento', 'documento']]) {
         if (campo === 'documento' && !persona.titular) continue;
         if (!String(persona[campo] ?? '').trim()) error(campo, `Completa ${etiqueta} de ${persona.titular ? 'la persona titular' : `la persona ${indice + 1}`}.`);
       }
-    } else if (!persona.nacimiento) {
+    } else if (!permitirIncompletos && menor && !persona.nacimiento) {
       error('nacimiento', `Indica la fecha de nacimiento del menor ${indice + 1}.`);
+    }
+    if (!permitirIncompletos && persona.titular && !String(persona.nacimiento ?? '').trim()) {
+      error('nacimiento', 'Completa la fecha de nacimiento de la persona titular.');
     }
     for (const campo of ['nacimiento', 'derivacion', 'vigencia', 'proximaCita']) {
       const valor = persona[campo];
@@ -37,4 +40,17 @@ export function erroresFamilia(familia, hoy = new Date()) {
 
 export function errorFamilia(familia, hoy = new Date()) {
   return erroresFamilia(familia, hoy)[0] ?? null;
+}
+
+export function datosPendientesFamilia(familia, hoy = new Date()) {
+  const grupos = new Map();
+  for (const error of erroresFamilia(familia, hoy)) {
+    const persona = familia.personas[error.indice];
+    if (!persona) continue;
+    if (!grupos.has(persona.id)) grupos.set(persona.id, { persona, campos: [], mensajes: [] });
+    const grupo = grupos.get(persona.id);
+    if (!grupo.campos.includes(error.campo)) grupo.campos.push(error.campo);
+    grupo.mensajes.push(error.mensaje);
+  }
+  return [...grupos.values()];
 }

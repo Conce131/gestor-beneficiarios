@@ -4,6 +4,14 @@
 
 - Detecta menores automáticamente por fecha de nacimiento y los marca en el formulario.
 - Exporta «MENOR» como nombre cuando el menor no tiene nombre registrado.
+- En el listado, añadir una familia o un miembro crea y guarda inmediatamente una fila.
+  Cada casilla se guarda al salir, aunque queden datos por completar. Las filas incompletas
+  se conservan al volver a abrir la aplicación y cuentan en el total de beneficiarios.
+- Los campos importantes pendientes aparecen resaltados y en «Acciones pendientes»,
+  con acceso directo a la casilla. El titular necesita nombre, apellidos y documento;
+  los adultos no titulares, nombre y apellidos. Los menores se identifican por su nacimiento.
+- Las fechas inválidas siguen requiriendo corrección. Antes de generar Excel se avisa
+  si hay familias con datos pendientes; el usuario puede revisarlas o exportar el estado actual.
 
 ## Versión 1.2.2
 

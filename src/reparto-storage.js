@@ -17,3 +17,5 @@ export function saveReparto(data) {
   queue = write.catch(() => {});
   return write;
 }
+
+export function resetReparto() { return saveReparto(null); }

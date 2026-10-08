@@ -5,3 +5,9 @@ export function numeroLibre(familias) {
   while (usados.has(numero)) numero++;
   return numero;
 }
+
+export function numeroParaRestaurar(familias, numeroAnterior) {
+  const anterior = Number(numeroAnterior);
+  return familias.some(familia => Number(familia.numero) === anterior)
+    ? numeroLibre(familias) : anterior;
+}

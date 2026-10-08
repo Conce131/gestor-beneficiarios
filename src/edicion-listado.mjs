@@ -15,7 +15,7 @@ export function editarPersona(familia, personaId, campo, valor, hoy = new Date()
     if (hoy.getMonth() < fecha.getMonth() || (hoy.getMonth() === fecha.getMonth() && hoy.getDate() < fecha.getDate())) edad--;
     persona.menor = !persona.titular && Boolean(valor) && edad < 18;
   }
-  const errores = erroresFamilia(copia, hoy);
+  const errores = erroresFamilia(copia, hoy, { permitirIncompletos: true });
   if (errores.length) throw new Error(errores[0].mensaje);
   return copia;
 }

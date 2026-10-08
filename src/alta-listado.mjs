@@ -2,7 +2,7 @@ import { erroresFamilia } from './validacion.mjs';
 import { numeroLibre } from './numeracion.mjs';
 
 // Construye la siguiente base sin modificar los registros guardados.
-export function incorporarAlta(familias, alta, hoy = new Date(), numerosReservados = []) {
+export function incorporarAlta(familias, alta, hoy = new Date(), opciones = {}) {
   const nueva = structuredClone(alta.persona);
   if (nueva.nacimiento) {
     const fecha = new Date(`${nueva.nacimiento}T00:00:00`);
@@ -12,7 +12,7 @@ export function incorporarAlta(familias, alta, hoy = new Date(), numerosReservad
   }
   const original = alta.familiaId ? familias.find(f => f.id === alta.familiaId) : null;
   if (alta.familiaId && !original) throw new Error('La familia ya no existe.');
-  const copia = original ? structuredClone(original) : { id: alta.id, numero: numeroLibre([...familias, ...numerosReservados.map(numero => ({ numero }))]), personas: [] };
+  const copia = original ? structuredClone(original) : { id: alta.id, numero: numeroLibre(familias), personas: [] };
   if (copia.personas.some(p => p.id === nueva.id)) throw new Error('Esta persona ya se ha añadido.');
   // Las fechas compartidas se toman del titular actual, sin sobrescribir otras ediciones.
   if (original) {
@@ -22,7 +22,7 @@ export function incorporarAlta(familias, alta, hoy = new Date(), numerosReservad
     nueva.vigencia = titular.vigencia;
   } else nueva.titular = true;
   copia.personas.push(nueva);
-  const errores = erroresFamilia(copia, hoy);
+  const errores = erroresFamilia(copia, hoy, opciones);
   if (errores.length) {
     const error = new Error(errores.map(e => e.mensaje).join(' '));
     error.campos = errores.filter(e => e.indice === copia.personas.length - 1).map(e => e.campo);

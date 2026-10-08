@@ -1,11 +1,11 @@
 import "./styles.css";
 import { loadImportReport, saveImportReport } from "./import-report.js";
-import { erroresFamilia } from "./validacion.mjs";
-import { numeroLibre } from "./numeracion.mjs";
+import { erroresFamilia, datosPendientesFamilia } from "./validacion.mjs";
+import { numeroLibre, numeroParaRestaurar } from "./numeracion.mjs";
 import { incorporarAlta } from "./alta-listado.mjs";
 import { editarPersona, eliminarMiembro, restaurarMiembro } from "./edicion-listado.mjs";
 import { coincideNumeroFamilia } from "./busqueda.mjs";
-import { loadDB, saveDB } from "./database.js";
+import { loadDB, saveDB, resetDB } from "./database.js";
 import { persona, familia, estado } from "./familias.js";
 import { edad, caducada, esc, fmt } from "./utils.js";
 import { exportExcel } from "./excel.js";
@@ -15,7 +15,7 @@ import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
 
 import { prepararReparto, MAX_REPARTO_FILAS, resumen, envases } from "./reparto.mjs";
-import { loadReparto, saveReparto } from "./reparto-storage.js";
+import { loadReparto, saveReparto, resetReparto } from "./reparto-storage.js";
 import companyLogo from "../bancoteide_logo.png?url";
 import { toPng } from "html-to-image";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -118,6 +118,7 @@ function navegacion() {
 }
 function render() {
   document.getElementById("app").dataset.view = vista;
+  document.getElementById("sectionNavigation").innerHTML = navegacion();
   if (vista === 'formulario') renderFormulario();
   else if (vista === 'resumen') renderResumen();
   else if (vista === 'reparto') renderReparto();
@@ -150,16 +151,21 @@ function getPendingActions() {
   for (const family of familias) {
     const titular = family.personas.find(p => p.titular) ?? family.personas[0];
     const name = `${titular?.nombre ?? ''} ${titular?.apellidos ?? ''}`.trim();
+    for (const pendiente of datosPendientesFamilia(family)) {
+      const etiqueta = pendiente.persona.titular ? 'Titular' : `${pendiente.persona.nombre || 'Miembro'} ${pendiente.persona.apellidos || ''}`.trim();
+      actions.push({ tipo: 'datos', family, name, personId: pendiente.persona.id, campo: pendiente.campos[0], message: `${etiqueta}: completar o revisar ${pendiente.campos.map(campo => listLabels[campo]).join(', ')}.` });
+    }
     const vencida = family.personas.some(person => caducada(person.vigencia));
     const citaPasada = family.personas.find(person => person.proximaCita && person.proximaCita < today);
     if (vencida && !family.personas.some(person => person.proximaCita)) {
-      actions.push({ family, name, message: 'Vigencia caducada: anota la próxima cita cuando esté concertada.' });
+      actions.push({ tipo: 'cita', family, name, message: 'Vigencia caducada: anota la próxima cita cuando esté concertada.' });
     }
     if (citaPasada) {
-      actions.push({ family, name, message: `La cita del ${fmt(citaPasada.proximaCita)} ya pasó: revisa y actualiza la vigencia.` });
+      actions.push({ tipo: 'vigencia', family, name, message: `La cita del ${fmt(citaPasada.proximaCita)} ya pasó: revisa y actualiza la vigencia.` });
     }
   }
-  return actions.sort((a, b) => a.family.numero - b.family.numero);
+  const prioridad = { vigencia: 0, cita: 1, datos: 2 };
+  return actions.sort((a, b) => prioridad[a.tipo] - prioridad[b.tipo] || a.family.numero - b.family.numero);
 }
 function renderPendingActions() {
   const details = app.querySelector('#pendingActions');
@@ -168,7 +174,33 @@ function renderPendingActions() {
   const summary = details.querySelector('summary');
   summary.innerHTML = `Acciones pendientes <span class="pending-count">${actions.length}</span>`;
   const list = details.querySelector('[data-pending-list]');
-  list.innerHTML = actions.length ? `<ul>${actions.map(item => `<li><span><strong>Familia ${item.family.numero}${item.name ? ` · ${esc(item.name)}` : ''}:</strong> ${esc(item.message)}</span><button type="button" class="secondary pending-family-link" data-pending-family="${esc(item.family.id)}">Ver familia</button></li>`).join('')}</ul>` : '<p>No hay acciones pendientes.</p>';
+  const grupos = [
+    ['vigencia', 'Revisar vigencias'],
+    ['cita', 'Anotar próximas citas'],
+    ['datos', 'Completar datos'],
+  ].map(([tipo, titulo]) => {
+    const grupo = actions.filter(item => item.tipo === tipo);
+    if (!grupo.length) return '';
+    return `<section class="pending-group pending-${tipo}"><h3>${titulo} <span>${grupo.length}</span></h3><ul>${grupo.map(item => `<li><span><strong>Familia ${item.family.numero}${item.name ? ` · ${esc(item.name)}` : ''}:</strong> ${esc(item.message)} <button type="button" class="secondary pending-family-link" data-pending-family="${esc(item.family.id)}" ${item.personId ? `data-pending-person="${esc(item.personId)}" data-pending-field="${esc(item.campo)}"` : ''}>${item.personId ? 'Completar datos' : 'Ver familia'}</button></span></li>`).join('')}</ul></section>`;
+  }).join('');
+  list.innerHTML = grupos || '<p>No hay acciones pendientes.</p>';
+}
+function avisarExportacionBloqueada() {
+  const acciones = getPendingActions();
+  const duplicados = findDuplicateGroups();
+  if (!acciones.length && !duplicados.length) return false;
+  const partes = [];
+  if (duplicados.length) partes.push(`${duplicados.length} incidencia${duplicados.length === 1 ? '' : 's'} de duplicados, que tienen prioridad`);
+  if (acciones.length) partes.push(`${acciones.length} acción${acciones.length === 1 ? '' : 'es'} pendiente${acciones.length === 1 ? '' : 's'}`);
+  avisoExcel = `No se puede generar el Excel hasta resolver ${partes.join(' y ')}.`;
+  vista = 'listado'; modoListado = 'personas'; filtroEstado = '';
+  busqueda = ''; numeroFamilia = '';
+  render();
+  const panel = app.querySelector('#pendingActions');
+  if (panel) panel.open = true;
+  setSaveState(avisoExcel, 'pending');
+  requestAnimationFrame(() => panel?.scrollIntoView({ block: 'center' }));
+  return true;
 }
 function normalizeDuplicateKey(value) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es").replace(/[^\p{L}\p{N}]/gu, "");
@@ -226,7 +258,7 @@ function updatePageNav() {
 }
 function renderResumen() {
   const r = resumen(familias);
-  app.innerHTML = navegacion() + `<div class="card summary-actions"><div><h2>Resumen de beneficiarios</h2><p>Consulta y comparte una imagen de este resumen.</p></div><button class="primary" data-action="exportSummary">${icon("download")} Descargar imagen</button></div>
+  app.innerHTML = `<div class="card summary-actions"><div><h2>Resumen de beneficiarios</h2><p>Consulta y comparte una imagen de este resumen.</p></div><button class="primary" data-action="exportSummary">${icon("download")} Descargar imagen</button></div>
   <div id="summaryImage" class="summary-image"><h2>Resumen de beneficiarios</h2><p class="summary-date">Generado el ${fmt(todayISO())}</p><div class="card"><div class="summary"><div class="stat"><strong>${r.familias}</strong>Familias</div><div class="stat"><strong>${r.personas}</strong>Beneficiarios</div></div></div>
   <div class="report-grid"><div class="card"><h2>Familias por número de miembros</h2><table><thead><tr><th>Miembros</th><th>Familias</th></tr></thead><tbody>${r.tamanos.map((n, i) => `<tr><td>${i + 1}</td><td>${n}</td></tr>`).join('')}${r.fuera ? `<tr><td>Más de 10</td><td>${r.fuera}</td></tr>` : ''}</tbody></table></div>
   <div class="card"><h2>Personas por rango de edad</h2><table><thead><tr><th>Rango de la plantilla</th><th>Personas</th></tr></thead><tbody>${['0–2 años', '3–18 años', '19–100 años'].map((label, i) => `<tr><td>${label}</td><td>${r.edades[i]}</td></tr>`).join('')}<tr><td>Sin fecha o fuera de los rangos</td><td>${r.sinRango}</td></tr></tbody></table><p>Se utilizan los límites de fechas de la plantilla: desde hace 3 años hasta antes de hoy; desde hace 18 hasta antes de hace 3 años; y desde hace 100 hasta antes de hace 18 años. Estos límites no coinciden exactamente con las etiquetas de edad.</p></div></div></div>`;
@@ -258,7 +290,7 @@ function renderReparto() {
   const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
   const tamanosActivos = r.tamanos.flatMap((cantidad, i) => cantidad ? [i + 1] : []);
   const anchoColumnaFamilia = tamanosActivos.length ? (62 / tamanosActivos.length).toFixed(3) : "0";
-  app.innerHTML = navegacion() + `<section class="card reparto-page">
+  app.innerHTML = `<section class="card reparto-page">
     <div class="reparto-heading"><div><div class="reparto-print-brand"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"></div><h2>Reparto de alimentos</h2><p class="reparto-intro">Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p></div><div class="reparto-actions"><button class="secondary" data-action="printReparto">Imprimir reparto</button><button class="primary" data-action="exportExcel">Generar Excel</button></div></div>
     <div class="reparto-summary"><span><strong>${r.tamanos.reduce((a, b) => a + b, 0)}</strong> familias</span><span><strong>${total}</strong> beneficiarios para el reparto</span></div>
     ${r.fuera ? `<div class="notice reparto-screen-note">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice reparto-screen-note">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}
@@ -325,16 +357,44 @@ function informeImportacion() {
   return `<section class="card import-report" aria-label="Resultado de la última importación"><h2>Última importación de Excel</h2><p><strong>${esc(ultimoInforme.archivo)}</strong> · ${esc(new Date(ultimoInforme.fecha).toLocaleString('es-ES'))}</p><p>${ultimoInforme.familias} familias y ${ultimoInforme.personas} beneficiarios cargados. <strong>${ultimoInforme.issues.length} filas omitidas.</strong></p>${ultimoInforme.issues.length ? `<details open><summary>Filas omitidas y motivos</summary><p>Revisa estas filas en el Excel original para corregirlas o añadir sus beneficiarios manualmente.</p><div class="table-wrap"><table><thead><tr><th>Fila del Excel</th><th>Familia</th><th>Persona</th><th>Motivo</th></tr></thead><tbody>${ultimoInforme.issues.map(issue => `<tr><td>${esc(issue.row)}</td><td>${esc(issue.familia || '—')}</td><td>${esc([issue.nombre, issue.apellidos].filter(Boolean).join(' ') || 'Sin nombre en el archivo')}</td><td>${esc(issue.reason)}</td></tr>`).join('')}</tbody></table></div></details>` : '<p>Se cargaron todos los registros válidos encontrados.</p>'}${ultimoInforme.warnings?.length ? `<details><summary>Datos informativos importados con ajustes (${ultimoInforme.warnings.length})</summary><ul>${ultimoInforme.warnings.map(item => `<li>Fila ${esc(item.row)}, familia ${esc(item.familia)}: ${esc(item.reason)}</li>`).join('')}</ul></details>` : ''}${ultimoInforme.sinPersistir ? '<p class="notice">Este informe no pudo guardarse para la próxima apertura. Consérvalo antes de cerrar la aplicación.</p>' : ''}</section>`;
 }
 const listDrafts = new Map();
-let listSaving = Promise.resolve(), altaListado = null, guardandoAlta = false;
+let listSaving = Promise.resolve(), guardandoAlta = false;
 const listLabels = { nombre: 'Nombre', apellidos: 'Apellidos', documento: 'Documento', nacimiento: 'Nacimiento', derivacion: 'Derivación', vigencia: 'Vigencia', proximaCita: 'Próxima cita' };
 const listDates = new Set(['nacimiento', 'derivacion', 'vigencia', 'proximaCita']);
 function listKey(input) { return `${input.dataset.familyId}:${input.dataset.personId}:${input.dataset.listField}`; }
-function listCell(f, p, campo) {
-  const esAlta = altaListado?.persona.id === p.id;
-  const valor = esAlta && listDates.has(campo) ? altaListado.fechas[campo] : listDates.has(campo) ? displayDate(p[campo]) : p[campo] ?? '';
-  const compartida = esAlta && altaListado.familiaId && ['derivacion', 'vigencia'].includes(campo);
-  return `<td class="editable-cell ${campo === 'vigencia' && caducada(p[campo]) ? 'cell-expired' : campo === 'proximaCita' && p[campo] && p[campo] < todayISO() ? 'cell-expired' : ''}"><span class="cell-print">${esc(valor || '—')}</span>${campo === 'nombre' && p.titular ? '<span class="titular-label">Titular</span>' : ''}<input type="text" value="${esc(valor)}" ${esAlta ? 'data-inline-field' : 'data-list-field'}="${campo}" ${compartida || (altaListado && !esAlta) ? 'readonly aria-readonly="true"' : ''} data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="${listLabels[campo]}, familia ${f.numero}, ${esc(p.nombre || 'persona')}" ${listDates.has(campo) ? 'placeholder="dd/mm/aaaa" inputmode="numeric"' : ''}></td>`;
+function validarFechaLista(input, avisar = true) {
+  if (!listDates.has(input.dataset.listField)) return true;
+  const valor = input.value.trim();
+  let mensajeError = '';
+  if (valor) {
+    const fecha = parseTypedDate(valor);
+    if (!fecha) mensajeError = 'Escribe una fecha válida como 15/06/1967.';
+    else {
+      const family = familias.find(item => item.id === input.dataset.familyId);
+      try { editarPersona(family, input.dataset.personId, input.dataset.listField, fecha); }
+      catch (error) { mensajeError = error.message; }
+    }
+  }
+  const invalida = Boolean(mensajeError);
+  const celda = input.closest('td');
+  celda?.classList.toggle('cell-invalid', invalida);
+  if (invalida) {
+    input.setAttribute('aria-invalid', 'true');
+    input.title = mensajeError;
+    input.setCustomValidity(mensajeError);
+    if (avisar) listNotice(`${listLabels[input.dataset.listField]}: ${mensajeError}`);
+    return false;
+  }
+  input.removeAttribute('aria-invalid');
+  input.title = '';
+  input.setCustomValidity('');
+  return true;
 }
+function listCell(f, p, campo, pendientes = []) {
+  const valor = listDates.has(campo) ? displayDate(p[campo]) : p[campo] ?? '';
+  const pendiente = pendientes.includes(campo);
+  return `<td class="editable-cell ${pendiente ? 'cell-missing' : ''} ${campo === 'vigencia' && caducada(p[campo]) ? 'cell-expired' : campo === 'proximaCita' && p[campo] && p[campo] < todayISO() ? 'cell-expired' : ''}"><span class="cell-print">${esc(valor || '—')}</span><input type="text" value="${esc(valor)}" data-list-field="${campo}" data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="${listLabels[campo]}, familia ${f.numero}, ${esc(p.nombre || 'persona')}${p.titular ? ', titular' : ''}${pendiente ? ', dato pendiente' : ''}" ${pendiente ? 'title="Dato pendiente de completar"' : ''} ${listDates.has(campo) ? 'placeholder="dd/mm/aaaa" inputmode="numeric"' : ''}></td>`;
+}
+
 function listNotice(message) {
   const notice = document.getElementById('listEditNotice');
   if (notice) {
@@ -384,25 +444,37 @@ async function guardarCelda(input) {
       const calculada = edad(valor);
       ageCell.textContent = calculada === '' ? '—' : calculada;
     }
+    const pendientesDatos = datosPendientesFamilia(copia);
     app.querySelectorAll('[data-row-family]').forEach(row => {
       if (row.dataset.rowFamily !== copia.id) return;
-      const [cl, tx] = estado(copia);
-      const badge = row.querySelector('.badge');
-      if (badge) { badge.className = `badge ${cl}`; badge.textContent = tx; }
+      const rowPerson = copia.personas.find(person => person.id === row.dataset.rowPerson);
+      const errorMiembro = pendientesDatos.some(item => item.persona.id === rowPerson?.id);
+      const [cl, tx] = rowPerson?.titular ? estadoListado(copia) : errorMiembro ? ['incomplete', 'Datos pendientes'] : ['', ''];
+      const statusCell = row.querySelector('[data-person-status]');
+      if (statusCell) statusCell.innerHTML = tx ? `<span class="badge ${cl}">${tx}</span>` : '';
       row.querySelectorAll('[data-list-field]').forEach(field => {
         const person = copia.personas.find(p => p.id === field.dataset.personId);
         const value = person?.[field.dataset.listField];
+        const pendiente = pendientesDatos.some(item => item.persona.id === person?.id && item.campos.includes(field.dataset.listField));
+        field.closest('td').classList.toggle('cell-missing', pendiente);
+        field.setAttribute('aria-label', `${listLabels[field.dataset.listField]}, familia ${copia.numero}, ${person?.nombre || 'persona'}${pendiente ? ', dato pendiente' : ''}`);
+        if (pendiente) field.title = 'Dato pendiente de completar';
+        else field.removeAttribute('title');
         field.closest('td').classList.toggle('cell-expired', Boolean(field.dataset.listField === 'vigencia' ? caducada(value) : field.dataset.listField === 'proximaCita' && value && value < todayISO()));
       });
     });
     app.querySelector('[data-action="toggleExpired"] strong').textContent = familias.filter(f => f.personas.some(p => caducada(p.vigencia))).length;
     listNotice(listDrafts.size ? 'Hay otras casillas pendientes de corregir o guardar.' : '');
-    setSaveState(listDrafts.size || altaListado ? 'Hay datos pendientes en el listado.' : 'Dato guardado en este ordenador.', listDrafts.size || altaListado ? 'pending' : 'saved');
+    setSaveState(listDrafts.size ? 'Hay datos pendientes en el listado.' : 'Dato guardado en este ordenador.', listDrafts.size ? 'pending' : 'saved');
     renderPendingActions();
     renderDuplicateAlert();
   } catch (error) {
     input.setAttribute('aria-invalid', 'true');
     input.setCustomValidity(error.message);
+    if (listDates.has(campo)) {
+      input.closest('td')?.classList.add('cell-invalid');
+      input.title = error.message;
+    }
     listNotice(`${listLabels[campo]}: ${error.message} Corrige la casilla o pulsa Escape para recuperar el dato anterior.`);
     setSaveState('El dato de la casilla no se ha guardado.', guardando ? 'error' : 'pending');
   } finally { input.disabled = false; }
@@ -414,16 +486,13 @@ function recuperarCelda(input) {
   listDrafts.delete(listKey(input));
   input.removeAttribute('aria-invalid');
   input.setCustomValidity('');
+  input.closest('td')?.classList.remove('cell-invalid');
+  input.removeAttribute('title');
   listNotice(listDrafts.size ? 'Hay otras casillas pendientes de corregir o guardar.' : '');
   setSaveState(listDrafts.size ? 'Hay datos pendientes en el listado.' : 'Dato anterior recuperado.', listDrafts.size ? 'pending' : 'saved');
 }
 async function listoParaSalirListado() {
   await listSaving;
-  if (altaListado) {
-    listNotice('Hay una fila nueva pendiente. Completa sus datos y pulsa «Guardar fila», o «Cancelar» para descartarla.');
-    app.querySelector('[data-inline-field]:not([readonly])')?.focus();
-    return false;
-  }
   // También guardar el campo con foco si la acción llega desde el teclado.
   for (const input of listDrafts.values()) await guardarCelda(input);
   if (!listDrafts.size) return true;
@@ -448,19 +517,19 @@ function sincronizarEncabezadoTabla() {
 }
 
 function renderImportar() {
-  app.innerHTML = navegacion() + `<section class="card import-page"><h2>Cargar listado desde Excel</h2><p>Selecciona un Excel de la plantilla oficial para sustituir las familias guardadas en este ordenador.</p><div class="notice">Comprueba que sea la versión más reciente. La importación sustituye el listado actual. El reparto no se importa y el archivo original no se modifica.</div><div class="actions"><button class="primary" data-action="importExcel">${icon("excel")} Seleccionar archivo Excel</button><input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel><button class="secondary" data-action="section" data-view="listado">Volver al listado</button></div><details class="backup-help"><summary>Detalles sobre el Excel y las copias</summary><div class="notice">El Excel generado contiene las hojas Listado, Reparto y Resumen. La plantilla admite hasta 995 beneficiarios; Reparto y el resumen por tamaño contemplan familias de 1 a 10 miembros.</div></details>${informeImportacion()}</section>`;
+  app.innerHTML = `<section class="card import-page"><h2>Cargar listado desde Excel</h2><p>Selecciona un Excel de la plantilla oficial para sustituir las familias guardadas en este ordenador.</p><div class="notice">Comprueba que sea la versión más reciente. La importación sustituye el listado actual. El reparto no se importa y el archivo original no se modifica.</div><div class="actions"><button class="primary" data-action="importExcel">${icon("excel")} Seleccionar archivo Excel</button><input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel><button class="secondary" data-action="section" data-view="listado">Volver al listado</button></div><details class="backup-help"><summary>Detalles sobre el Excel y las copias</summary><div class="notice">El Excel generado contiene las hojas Listado, Reparto y Resumen. La plantilla admite hasta 995 beneficiarios; Reparto y el resumen por tamaño contemplan familias de 1 a 10 miembros.</div></details>${informeImportacion()}${isTauri() ? `<section class="owner-tools"><h3>Herramientas del propietario</h3><p>Borra de este ordenador las familias, el reparto, el historial de importación y las copias de recuperación.</p><button type="button" class="danger" data-action="resetAllData">Eliminar todos los datos de este ordenador</button></section>` : ''}</section>`;
 }
 
 function renderListado() {
   app.innerHTML = `<section class="card list-print-card" aria-label="Listado de beneficiarios"><div class="table-wrap" id="beneficiaryTable" tabindex="0" aria-label="Tabla de beneficiarios">
   <div class="list-controls" role="region" aria-label="Herramientas del listado">
-    ${navegacion()}
     <div class="list-workspace-heading"><div><h2>Beneficiarios</h2><p class="list-intro">Familias agrupadas · edición directa en la tabla</p></div><div class="list-workspace-actions"><button class="secondary" data-action="exportExcel">${icon("excel")} Generar Excel</button><button class="secondary" data-action="printListado">Imprimir</button><button class="secondary" data-action="sortMembers" aria-pressed="${ordenListado.personas.columna === 'miembros'}">Miembros ↕</button></div></div>
     <div class="summary list-summary"><div class="stat"><strong>${familias.length}</strong>Familias</div><div class="stat"><strong>${familias.reduce((n, f) => n + f.personas.length, 0)}</strong>Beneficiarios</div><button type="button" class="stat stat-filter" data-action="toggleExpired" aria-pressed="${filtroEstado === 'overdue'}" title="Filtrar familias con vigencias caducadas"><strong>${familias.filter(f => f.personas.some(p => caducada(p.vigencia))).length}</strong><span>Caducadas</span><small data-filter-hint>${filtroEstado === 'overdue' ? 'Quitar filtro' : 'Filtrar familias'}</small></button><div class="stat"><strong>${familias.filter(f => f.personas.some(p => p.proximaCita)).length}</strong>Con próxima cita</div></div>
-    <div class="toolbar list-filters"><label class="state-filter">Estado de la familia<select data-state-filter aria-label="Filtrar por estado de la familia">${[['', 'Todos'], ['ok', 'Correcta'], ['warn', 'Próxima'], ['expired', 'Caducada'], ['overdue', 'Todas las caducadas'], ['appointment', 'Cita pendiente']].map(([value, label]) => `<option value="${value}" ${filtroEstado === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="family-search" for="familyNumber">N.º de familia<input id="familyNumber" value="${esc(numeroFamilia)}" inputmode="numeric" placeholder="Todos" data-family-search></label><label class="text-search" for="search">Nombre o documento<input value="${esc(busqueda)}" id="search" class="search" placeholder="Buscar en el listado" data-search></label><button class="primary list-add-family" data-action="newFamily" title="Se asignará el primer número libre: ${numeroLibre([...familias, ...familiasEliminadas.map(item => ({ numero: item.familia.numero }))])}">${icon("add")} Añadir familia</button>${familiasEliminadas.length ? `<button class="secondary list-undo-family" data-action="undoDeleteFamily" title="Deshacer el último borrado en la familia ${familiasEliminadas.at(-1).familia.numero}">${icon("restore")} Deshacer borrado</button>` : ''}<button class="secondary table-nav-button" data-action="tableStart" title="Ir al inicio de la tabla">↑ Inicio</button><button class="secondary table-nav-button" data-action="tableEnd" title="Ir al final de la tabla">↓ Final</button></div>
+    <div class="toolbar list-filters"><label class="state-filter">Estado de la familia<select data-state-filter aria-label="Filtrar por estado de la familia">${[['', 'Todos'], ['incomplete', 'Datos pendientes'], ['ok', 'Correcta'], ['warn', 'Próxima'], ['expired', 'Caducada'], ['overdue', 'Todas las caducadas'], ['appointment', 'Cita pendiente']].map(([value, label]) => `<option value="${value}" ${filtroEstado === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><label class="family-search" for="familyNumber">N.º de familia<input id="familyNumber" value="${esc(numeroFamilia)}" inputmode="numeric" placeholder="Todos" data-family-search></label><label class="text-search" for="search">Nombre o documento<input value="${esc(busqueda)}" id="search" class="search" placeholder="Buscar en el listado" data-search></label><button class="primary list-add-family" data-action="newFamily" title="Se asignará el primer número libre: ${numeroLibre(familias)}">${icon("add")} Añadir familia</button>${familiasEliminadas.length ? `<button class="secondary list-undo-family" data-action="undoDeleteFamily" title="Deshacer el último borrado en la familia ${familiasEliminadas.at(-1).familia.numero}">${icon("restore")} Deshacer borrado</button>` : ''}<button class="secondary table-nav-button" data-action="tableStart" title="Ir al inicio de la tabla">↑ Inicio</button><button class="secondary table-nav-button" data-action="tableEnd" title="Ir al final de la tabla">↓ Final</button></div>
+    <div id="activeListFilters" class="active-list-filters" role="status" hidden></div>
     <details class="pending-actions" id="pendingActions"><summary>Acciones pendientes <span class="pending-count">0</span></summary><div data-pending-list></div></details>
     <p class="filter-help">La búsqueda conserva juntos a los miembros de cada familia.</p><p class="list-edit-help">Los cambios se guardan al salir de la casilla; derivación y vigencia son comunes a la familia.</p><p id="listEditNotice" class="notice" role="status" hidden></p>
-    <details class="status-legend"><summary>Significado de los estados</summary><ul><li><span class="badge ok">Correcta</span><span>Vigencias al día, sin vencer en 60 días.</span></li><li><span class="badge warn">Próxima</span><span>Alguna vigencia vence en los próximos 60 días.</span></li><li><span class="badge expired">Caducada</span><span>Hay una vigencia vencida.</span></li><li><span class="badge appointment">Cita pendiente</span><span>Hay una vigencia vencida con cita anotada.</span></li></ul></details>
+    <details class="status-legend"><summary>Significado de los estados</summary><ul><li><span class="badge incomplete">Datos pendientes</span><span>Faltan datos importantes. La fila ya está guardada.</span></li><li><span class="badge ok">Correcta</span><span>Vigencias al día, sin vencer en 60 días.</span></li><li><span class="badge warn">Próxima</span><span>Alguna vigencia vence en los próximos 60 días.</span></li><li><span class="badge expired">Caducada</span><span>Hay una vigencia vencida.</span></li><li><span class="badge appointment">Cita pendiente</span><span>Hay una vigencia vencida con cita anotada.</span></li></ul></details>
   </div>
   <table><thead id="listHead"><tr><th>N.º</th><th>Nombre</th><th>Apellidos</th><th>Documento</th><th>Nacimiento</th><th>Edad</th><th>Derivación</th><th>Vigencia</th><th>Próxima cita</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="rows"></tbody></table>
   </div><p id="counter" class="list-counter"></p></section>`;
@@ -470,8 +539,12 @@ function renderListado() {
   sincronizarEncabezadoTabla();
 }
 
+function estadoListado(f) {
+  const actual = estado(f);
+  return actual[0] === 'ok' && datosPendientesFamilia(f).length ? ['incomplete', 'Datos pendientes'] : actual;
+}
 function coincideEstado(f) {
-  return !filtroEstado || (filtroEstado === 'overdue' ? f.personas.some(p => caducada(p.vigencia)) : estado(f)[0] === filtroEstado);
+  return !filtroEstado || (filtroEstado === 'overdue' ? f.personas.some(p => caducada(p.vigencia)) : filtroEstado === 'incomplete' ? datosPendientesFamilia(f).length > 0 : estadoListado(f)[0] === filtroEstado);
 }
 function filterTable() {
   const memberSort = app.querySelector('[data-action="sortMembers"]');
@@ -489,16 +562,25 @@ function filterTable() {
   const q = (document.getElementById("search")?.value || "").toLowerCase().trim();
   busqueda = q;
   numeroFamilia = document.getElementById("familyNumber")?.value.trim() || "";
+  const filtrosActivos = app.querySelector('#activeListFilters');
+  const estadoElegido = app.querySelector('[data-state-filter] option:checked')?.textContent;
+  const etiquetas = [numeroFamilia && `Familia n.º ${numeroFamilia}`, busqueda && `Búsqueda: ${busqueda}`, filtroEstado && `Estado: ${estadoElegido}`].filter(Boolean);
+  app.querySelector('.family-search')?.classList.toggle('filter-active', Boolean(numeroFamilia));
+  app.querySelector('.text-search')?.classList.toggle('filter-active', Boolean(busqueda));
+  app.querySelector('.state-filter')?.classList.toggle('filter-active', Boolean(filtroEstado));
+  if (filtrosActivos) {
+    filtrosActivos.hidden = etiquetas.length === 0;
+    filtrosActivos.innerHTML = `<span><strong>Listado filtrado:</strong> ${etiquetas.map(esc).join(' · ')}</span><button type="button" class="secondary" data-action="clearListFilters">Quitar filtros · Ver todas las familias</button>`;
+  }
+
   if (modoListado === 'personas') {
     const all = familias.flatMap(f => f.personas.map(p => ({ f, p })));
-    const visibles = familias.map(f => altaListado?.familiaId === f.id ? { ...f, personas: [...f.personas, altaListado.persona] } : f);
-    if (altaListado && !altaListado.familiaId) visibles.push({ id: altaListado.id, numero: altaListado.numero, personas: [altaListado.persona] });
-    const grupos = ordenarListado(visibles.filter(f => (altaListado && (f.id === altaListado.familiaId || f.id === altaListado.id)) || (coincideEstado(f) && coincideNumeroFamilia(f.numero, numeroFamilia) && (!q || f.personas.some(p => (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q))))), (f, col) => {
+    const grupos = ordenarListado(familias.filter(f => coincideEstado(f) && coincideNumeroFamilia(f.numero, numeroFamilia) && (!q || f.personas.some(p => (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q)))), (f, col) => {
       const titular = f.personas.find(p => p.titular) ?? f.personas[0];
       if (col === 'numero') return f.numero;
       if (col === 'miembros') return f.personas.length;
       if (col === 'edad') return edad(titular?.nacimiento);
-      if (col === 'estado') return estado(f)[1];
+      if (col === 'estado') return estadoListado(f)[1];
       return titular?.[col];
     });
     const list = grupos.flatMap((f, grupo) => [...f.personas].sort((a, b) => Number(Boolean(b.titular)) - Number(Boolean(a.titular))).map(p => ({ f, p, grupo })));
@@ -506,91 +588,51 @@ function filterTable() {
     document.getElementById('rows').innerHTML = list.map(({ f, p, grupo }, index) => {
       const primero = index === 0 || list[index - 1].f.id !== f.id;
       const ultimo = index === list.length - 1 || list[index + 1].f.id !== f.id;
-      const esAlta = altaListado?.persona.id === p.id;
-      const [cl, tx] = esAlta ? ['draft', 'Sin guardar'] : estado(f);
+      const pendientes = datosPendientesFamilia(f).find(item => item.persona.id === p.id)?.campos ?? [];
+      const celda = campo => listCell(f, p, campo, pendientes);
+      const errorMiembro = !p.titular && pendientes.length > 0;
+      const [cl, tx] = p.titular ? estadoListado(f) : errorMiembro ? ['incomplete', 'Datos pendientes'] : ['', ''];
       const match = q && (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q);
-      return `<tr data-row-family="${esc(f.id)}" class="family-group ${grupo % 2 ? 'group-tinted' : ''} ${primero ? 'family-start' : ''} ${ultimo ? 'family-end' : ''} ${p.titular ? 'titular-row' : ''} ${esAlta ? 'inline-draft-row' : ''} ${match ? 'search-match' : ''}">${primero ? `<td class="family-group-number ${f.personas.length === 1 ? 'family-single' : ''}" rowspan="${f.personas.length}">${!altaListado ? `<button class="family-delete-cross" data-action="deleteFamily" data-id="${esc(f.id)}" title="Borrar familia ${f.numero}" aria-label="Borrar familia ${f.numero}">×</button>` : ''}<small>Familia</small><span class="family-number">${f.numero}</span><small>${f.personas.length} ${f.personas.length === 1 ? 'miembro' : 'miembros'}</small></td>` : ''}${listCell(f, p, 'nombre')}${listCell(f, p, 'apellidos')}${listCell(f, p, 'documento')}${listCell(f, p, 'nacimiento')}<td class="age-cell">${edad(p.nacimiento) === '' ? '—' : edad(p.nacimiento)}</td>${listCell(f, p, 'derivacion')}${listCell(f, p, 'vigencia')}${listCell(f, p, 'proximaCita')}<td><span class="badge ${cl}">${tx}</span></td><td class="list-actions-column">${esAlta ? `<button class="primary" data-action="saveInlineRow">Guardar fila</button><button class="secondary" data-action="cancelInlineRow">Cancelar</button>` : ''}${!esAlta && !p.titular ? `<button class="danger" data-action="deleteMember" data-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="Borrar miembro de la familia ${f.numero}" title="Borrar esta persona">${icon("trash")}</button>` : ''}${!esAlta && !altaListado && (index === list.length - 1 || list[index + 1].f.id !== f.id) ? `<button class="secondary" data-action="addFamilyPerson" data-id="${esc(f.id)}">${icon('add')} Miembro</button>` : ''}</td></tr>`;
+      return `<tr data-row-family="${esc(f.id)}" data-row-person="${esc(p.id)}" class="family-group ${grupo % 2 ? 'group-tinted' : ''} ${primero ? 'family-start' : ''} ${ultimo ? 'family-end' : ''} ${p.titular ? 'titular-row' : ''} ${match ? 'search-match' : ''}">${primero ? `<td class="family-group-number ${f.personas.length === 1 ? 'family-single' : ''}" rowspan="${f.personas.length}"><button class="family-delete-cross" data-action="deleteFamily" data-id="${esc(f.id)}" title="Borrar familia ${f.numero}" aria-label="Borrar familia ${f.numero}">×</button><small>Familia</small><span class="family-number">${f.numero}</span><small>${f.personas.length} ${f.personas.length === 1 ? 'miembro' : 'miembros'}</small></td>` : ''}${celda('nombre')}${celda('apellidos')}${celda('documento')}${celda('nacimiento')}<td class="age-cell">${edad(p.nacimiento) === '' ? '—' : edad(p.nacimiento)}</td>${celda('derivacion')}${celda('vigencia')}${celda('proximaCita')}<td data-person-status>${tx ? `<span class="badge ${cl}">${tx}</span>` : ''}</td><td class="list-actions-column">${!p.titular ? `<button class="danger" data-action="deleteMember" data-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="Borrar miembro de la familia ${f.numero}" title="Borrar esta persona">${icon("trash")}</button>` : ''}${(index === list.length - 1 || list[index + 1].f.id !== f.id) ? `<button class="secondary" data-action="addFamilyPerson" data-id="${esc(f.id)}">${icon('add')} Miembro</button>` : ''}</td></tr>`;
     }).join('') || '<tr><td colspan="11" class="empty">No se encontraron familias. Prueba con otros filtros.</td></tr>';
-    document.getElementById('counter').textContent = `Mostrando ${grupos.length} de ${familias.length} familias · ${list.filter(({ p }) => p.id !== altaListado?.persona.id).length} de ${all.length} personas${altaListado ? ' · 1 fila sin guardar' : ''}`;
+    document.getElementById('counter').textContent = `Mostrando ${grupos.length} de ${familias.length} familias · ${list.length} de ${all.length} personas`;
     return;
   }
 
 }
-function enfocarAlta() {
-  requestAnimationFrame(() => {
-    const input = app.querySelector('[data-inline-field="nombre"]');
-    input?.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
-    input?.focus({ preventScroll: true });
-  });
-}
-function iniciarAlta(familiaId = null) {
-  const f = familiaId ? familias.find(f => f.id === familiaId) : familia(numeroLibre([...familias, ...familiasEliminadas.map(item => ({ numero: item.familia.numero }))]));
-  if (!f) return;
-  const nueva = familiaId ? persona() : f.personas[0];
-  if (familiaId) {
-    const titular = f.personas.find(p => p.titular) ?? f.personas[0];
-    nueva.derivacion = titular.derivacion;
-    nueva.vigencia = titular.vigencia;
-  }
-  if (!familiaId) { busqueda = ''; numeroFamilia = ''; filtroEstado = ''; }
-  altaListado = { id: f.id, numero: f.numero, familiaId, persona: nueva, fechas: Object.fromEntries([...listDates].map(campo => [campo, displayDate(nueva[campo])])) };
-  modoListado = 'personas';
-  edicionListado = true;
-  vista = 'listado';
-  setSaveState('Fila nueva pendiente de completar. Pulsa Guardar fila al terminar.', 'pending');
-  renderListado();
-  listNotice(nueva.titular ? 'Nueva familia: completa nombre, apellidos y documento del titular y pulsa «Guardar fila».' : 'Nuevo miembro: completa nombre y apellidos. Para un menor, basta la fecha de nacimiento. Pulsa «Guardar fila» al terminar.');
-  enfocarAlta();
-}
-function newFamily() { iniciarAlta(); }
-async function guardarAltaListado() {
-  if (!altaListado || guardandoAlta) return;
+async function iniciarAlta(familiaId = null) {
+  if (guardandoAlta) return;
   guardandoAlta = true;
-  app.querySelectorAll('[data-action="saveInlineRow"], [data-action="cancelInlineRow"]').forEach(button => button.disabled = true);
-  let persistiendo = false;
+  app.querySelectorAll('[data-action="newFamily"], [data-action="addFamilyPerson"]').forEach(button => button.disabled = true);
+  app.querySelectorAll('[data-list-field]').forEach(input => input.disabled = true);
   try {
-    await listSaving;
-    const alta = structuredClone(altaListado);
-    for (const campo of listDates) {
-      const texto = alta.fechas[campo].trim();
-      const fecha = texto ? parseTypedDate(texto) : '';
-      if (texto && !fecha) {
-        const error = new Error(`${listLabels[campo]}: escribe una fecha válida como 15/06/1967.`);
-        error.campos = [campo];
-        throw error;
-      }
-      alta.persona[campo] = fecha;
-    }
-    const next = incorporarAlta(familias, alta, new Date(), familiasEliminadas.map(item => item.familia.numero));
-    persistiendo = true;
-    setSaveState('Guardando la nueva fila…', 'saving');
+    const f = familiaId ? familias.find(f => f.id === familiaId) : familia(numeroLibre(familias));
+    if (!f) throw new Error('No se encontró la familia.');
+    const nueva = familiaId ? persona() : f.personas[0];
+    const next = incorporarAlta(familias, { id: f.id, familiaId, persona: nueva }, new Date(), { permitirIncompletos: true });
+    setSaveState('Creando la fila…', 'saving');
     await saveDB(next);
     familias = next;
-    const personaId = alta.persona.id;
-    altaListado = null;
-    setSaveState('Fila guardada.', 'saved');
+    busqueda = ''; numeroFamilia = ''; filtroEstado = '';
+    modoListado = 'personas'; vista = 'listado';
+    setSaveState('Fila creada y guardada. Completa sus datos directamente en la tabla.', 'saved');
     render();
+    listNotice('Los cambios se guardan al salir de cada casilla. Los datos que falten aparecerán en Acciones pendientes.');
     requestAnimationFrame(() => {
-      const input = [...app.querySelectorAll('[data-list-field="nombre"]')].find(field => field.dataset.personId === personaId);
+      const input = [...app.querySelectorAll('[data-list-field="nombre"]')].find(field => field.dataset.personId === nueva.id);
       input?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       input?.focus({ preventScroll: true });
     });
   } catch (error) {
-    listNotice(`${error.message} La fila sigue aquí para que puedas completarla.`);
-    setSaveState(persistiendo ? 'No se pudo guardar la fila. Reintenta el guardado.' : 'Completa los datos de la fila nueva.', persistiendo ? 'error' : 'pending');
-    for (const campo of error.campos ?? []) app.querySelector(`[data-inline-field="${campo}"]`)?.setAttribute('aria-invalid', 'true');
-    app.querySelector('[data-inline-field][aria-invalid="true"]')?.focus();
+    listNotice(`No se pudo crear la fila: ${error.message}`);
+    setSaveState('No se pudo guardar la fila nueva. Vuelve a intentarlo.', 'error');
   } finally {
     guardandoAlta = false;
-    app.querySelectorAll('[data-action="saveInlineRow"], [data-action="cancelInlineRow"]').forEach(button => button.disabled = false);
+    app.querySelectorAll('[data-action="newFamily"], [data-action="addFamilyPerson"]').forEach(button => button.disabled = false);
+    app.querySelectorAll('[data-list-field]').forEach(input => input.disabled = false);
   }
 }
-function cancelarAltaListado() {
-  if (guardandoAlta) return;
-  altaListado = null;
-  setSaveState('Fila nueva descartada.', 'saved');
-  render();
-}
+function newFamily() { return iniciarAlta(); }
 async function back(target) {
   const isNewFamily = editando && !familias.some(f => f.id === editando.id);
   const titular = editando?.personas.find(person => person.titular);
@@ -655,15 +697,20 @@ async function borrarMiembroListado(familiaId, personaId) {
 async function recuperarFamilia() {
   const ultima = familiasEliminadas.at(-1);
   if (!ultima) return;
+  const recuperada = structuredClone(ultima.familia);
+  if (ultima.tipo !== 'persona') recuperada.numero = numeroParaRestaurar(familias, recuperada.numero);
   const next = ultima.tipo === 'persona'
     ? familias.map(f => f.id === ultima.familia.id ? restaurarMiembro(f, ultima.persona, ultima.indice) : f)
-    : [...familias, structuredClone(ultima.familia)].sort((a, b) => a.numero - b.numero);
+    : [...familias, recuperada].sort((a, b) => a.numero - b.numero);
   setSaveState('Recuperando la familia…', 'saving');
   await saveDB(next);
   familias = next;
   familiasEliminadas.pop();
-  setSaveState(ultima.tipo === 'persona' ? `Persona recuperada en la familia ${ultima.familia.numero}.` : `Familia ${ultima.familia.numero} recuperada.`, 'saved');
+  const renumerada = ultima.tipo !== 'persona' && Number(recuperada.numero) !== Number(ultima.familia.numero);
+  const mensaje = renumerada ? `Familia recuperada con el número ${recuperada.numero}, porque el ${ultima.familia.numero} ya está ocupado.` : `Familia ${recuperada.numero} recuperada.`;
+  setSaveState(ultima.tipo === 'persona' ? `Persona recuperada en la familia ${ultima.familia.numero}.` : mensaje, 'saved');
   renderListado();
+  if (renumerada) listNotice(mensaje);
   requestAnimationFrame(() => app.querySelector(`[data-row-family="${CSS.escape(ultima.familia.id)}"]`)?.scrollIntoView({ block: 'nearest' }));
 }
 
@@ -791,23 +838,49 @@ function reportError(error) {
 }
 
 const app = document.getElementById("app");
+function moverCasilla(input, direccion) {
+  const campos = [...app.querySelectorAll('[data-list-field]')].filter(field => !field.disabled);
+  let destino;
+  if (direccion === 'up' || direccion === 'down') {
+    const columna = campos.filter(field => field.dataset.listField === input.dataset.listField);
+    destino = columna[columna.indexOf(input) + (direccion === 'down' ? 1 : -1)];
+  } else {
+    destino = campos[campos.indexOf(input) + (direccion === 'next' ? 1 : -1)];
+  }
+  if (!destino) return false;
+  destino.focus({ preventScroll: true });
+  destino.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  return true;
+}
 app.addEventListener('keydown', event => {
   const input = event.target;
-  if (input.hasAttribute('data-inline-field')) {
-    if (event.key === 'Enter') { event.preventDefault(); guardarAltaListado(); }
+  if (!input.hasAttribute('data-list-field') || input.disabled || event.isComposing) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    recuperarCelda(input);
     return;
   }
-  if (!input.hasAttribute('data-list-field')) return;
-  if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
-  if (event.key === 'Escape' && !input.disabled) {
-    recuperarCelda(input);
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    if (!moverCasilla(input, event.shiftKey ? 'up' : 'down')) input.blur();
+    return;
+  }
+  if (event.key === 'Tab') {
+    if (moverCasilla(input, event.shiftKey ? 'previous' : 'next')) event.preventDefault();
+    return;
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
+  if (!event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown')) {
+    event.preventDefault();
+    moverCasilla(input, event.key === 'ArrowDown' ? 'down' : 'up');
   }
 });
-document.getElementById("appVersion").textContent = appVersion;
+const versionLabel = document.getElementById("appVersion");
+if (versionLabel) versionLabel.textContent = `v${appVersion}`;
+const headerLogo = document.querySelector("header .company-logo");
+if (headerLogo) headerLogo.title = `Gestor de beneficiarios · versión ${appVersion}`;
 const actions = {
   discardListChanges: async () => { await listSaving; for (const input of listDrafts.values()) recuperarCelda(input); },
-  saveInlineRow: guardarAltaListado,
-  cancelInlineRow: cancelarAltaListado,
   newFamily, back, addPerson,
   saveFamily: () => back(),
   cancelFamily: () => { editando = null; dateDrafts.clear(); vista = "listado"; setSaveState("Cambios pendientes descartados.", "saved"); render(); },
@@ -815,6 +888,39 @@ const actions = {
     filtroEstado = filtroEstado === 'overdue' ? '' : 'overdue';
     app.querySelector('[data-state-filter]').value = filtroEstado;
     filterTable();
+  },
+  clearListFilters: () => {
+    busqueda = ''; numeroFamilia = ''; filtroEstado = '';
+    app.querySelector('#search').value = '';
+    app.querySelector('#familyNumber').value = '';
+    app.querySelector('[data-state-filter]').value = '';
+    filterTable();
+  },
+  resetAllData: async () => {
+    if (!isTauri()) return;
+    const confirmation = prompt('Esto borrará todos los datos y las copias de recuperación de este ordenador. Escribe BORRAR para continuar:');
+    if (confirmation !== 'BORRAR') return;
+    try {
+      setSaveState('Borrando todos los datos…', 'saving');
+      await resetDB();
+      await resetReparto();
+      await saveImportReport(null);
+      familias = [];
+      familiasEliminadas = [];
+      reparto = prepararReparto(null);
+      ultimoInforme = null;
+      editando = null;
+      dateDrafts.clear();
+      listDrafts.clear();
+      busqueda = ''; numeroFamilia = ''; filtroEstado = '';
+      vista = 'listado';
+      render();
+      setSaveState('Todos los datos de este ordenador se han eliminado.', 'saved');
+    } catch (error) {
+      console.error(error);
+      setSaveState('No se pudieron eliminar todos los datos.', 'error');
+      alert(`No se pudieron eliminar todos los datos. ${error.message}`);
+    }
   },
   reload: () => location.reload(),
   section: target => { vista = target.dataset.view; render(); },
@@ -853,6 +959,7 @@ const actions = {
   tableEnd: () => { const table = document.getElementById('beneficiaryTable'); table?.scrollTo({ top: table.scrollHeight, behavior: 'smooth' }); },
   removePerson: target => removePerson(Number(target.dataset.index)),
   exportExcel: async target => {
+    if (avisarExportacionBloqueada()) return;
     target.disabled = true;
     target.textContent = "Generando Excel…";
     avisoExcel = "";
@@ -881,16 +988,19 @@ const actions = {
     } catch { picker.click(); }
   },
 };
-app.addEventListener("click", async event => {
+async function handleActionClick(event) {
   const target = event.target.closest("[data-action]");
-  if (!target || !app.contains(target)) return;
+  if (!target || !event.currentTarget.contains(target)) return;
   try {
     if (guardandoAlta) return;
-    if (!['discardListChanges', 'saveInlineRow', 'cancelInlineRow'].includes(target.dataset.action) && !await listoParaSalirListado()) return;
+    if (target.dataset.action !== 'discardListChanges' && !await listoParaSalirListado()) return;
     await actions[target.dataset.action]?.(target);
   } catch (error) { reportError(error); }
-});
+}
+app.addEventListener("click", handleActionClick);
+document.getElementById("sectionNavigation").addEventListener("click", handleActionClick);
 document.getElementById("duplicateAlert").addEventListener("click", event => {
+  if (guardandoAlta) return;
   const target = event.target.closest("[data-duplicate-family]");
   if (target) listoParaSalirListado().then(listo => { if (listo) {
     const family = familias.find(item => item.id === target.dataset.duplicateFamily);
@@ -903,23 +1013,31 @@ document.getElementById("duplicateAlert").addEventListener("click", event => {
 });
 app.addEventListener('click', event => {
   const target = event.target.closest('[data-pending-family]');
-  if (!target) return;
+  if (!target || guardandoAlta) return;
+  const familyId = target.dataset.pendingFamily;
+  const personId = target.dataset.pendingPerson;
+  const campo = target.dataset.pendingField;
   listoParaSalirListado().then(listo => {
     if (!listo) return;
-    const family = familias.find(item => item.id === target.dataset.pendingFamily);
+    const family = familias.find(item => item.id === familyId);
     if (!family) return;
-    vista = 'listado'; modoListado = 'personas';
+    vista = 'listado'; modoListado = 'personas'; filtroEstado = '';
     numeroFamilia = String(family.numero); busqueda = '';
     render();
-    requestAnimationFrame(() => app.querySelector(`[data-row-family="${CSS.escape(family.id)}"]`)?.scrollIntoView({ block: 'center' }));
-  });
+    requestAnimationFrame(() => {
+      const input = [...app.querySelectorAll('[data-list-field]')].find(field => field.dataset.personId === personId && field.dataset.listField === campo);
+      const destino = input ?? app.querySelector(`[data-row-family="${CSS.escape(family.id)}"]`);
+      destino?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      input?.focus({ preventScroll: true });
+    });
+  }).catch(reportError);
 });
 document.getElementById('pageUp').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 document.getElementById('pageDown').addEventListener('click', () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
 window.addEventListener('scroll', updatePageNav, { passive: true });
 window.addEventListener('resize', updatePageNav);
 window.addEventListener('beforeunload', event => {
-  if (!altaListado && !listDrafts.size) return;
+  if (!guardandoAlta && !listDrafts.size) return;
   event.preventDefault();
   event.returnValue = '';
 });
@@ -931,27 +1049,14 @@ window.addEventListener("beforeprint", () => {
 });
 app.addEventListener("input", async event => {
   const target = event.target;
-  target.removeAttribute("aria-invalid");
-  if (target.hasAttribute('data-inline-field') && altaListado) {
-    const campo = target.dataset.inlineField;
-    if (listDates.has(campo)) {
-      altaListado.fechas[campo] = target.value;
-      if (campo === 'nacimiento') {
-        const fecha = parseTypedDate(target.value);
-        altaListado.persona.nacimiento = fecha || '';
-        const cell = target.closest('tr').querySelector('.age-cell');
-        if (cell) cell.textContent = fecha ? edad(fecha) : '—';
-      }
-    } else altaListado.persona[campo] = target.value.trim();
-    setSaveState('Fila nueva pendiente de guardar.', 'pending');
-    return;
-  }
   if (target.hasAttribute("data-list-field")) {
     listDrafts.set(listKey(target), target);
-    target.setCustomValidity("");
+    if (target.getAttribute('aria-invalid') === 'true' || (listDates.has(target.dataset.listField) && target.value.trim() && target.value.trim().length >= 8)) validarFechaLista(target, true);
+    else { target.removeAttribute('aria-invalid'); target.setCustomValidity(''); }
     setSaveState("El dato se guardará al salir de la casilla.", "pending");
     return;
   }
+  target.removeAttribute("aria-invalid");
   if (target.hasAttribute('data-food-name') || target.hasAttribute('data-food-amount')) {
     const index = Number(target.dataset.foodName ?? target.dataset.foodAmount);
     if (target.hasAttribute('data-food-name')) reparto[index].nombre = target.value;
@@ -1033,6 +1138,10 @@ app.addEventListener("change", async event => {
 
 app.addEventListener("focusout", event => {
   const target = event.target;
+  if (target.hasAttribute('data-list-field') && listDates.has(target.dataset.listField)) {
+    validarFechaLista(target, true);
+    return;
+  }
   if (target.hasAttribute("data-date-text") && target.value.trim() && !parseTypedDate(target.value)) {
     target.setCustomValidity("Escriba una fecha válida como 15/06/1967.");
     target.reportValidity();

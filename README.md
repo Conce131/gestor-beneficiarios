@@ -664,6 +664,20 @@ LibreOffice). En el navegador, el archivo se descarga con el nombre
 
 ## Vistas de Listado, Resumen y Reparto
 
+El listado abre en Personas, con una fila por beneficiario y separación entre
+familias. Los nombres, apellidos, documentos y fechas se pueden corregir en la
+tabla; el cambio se valida y guarda al salir de la casilla (con Tab, Intro o un
+clic fuera). Las fechas de derivación y vigencia se comparten con toda la familia.
+Una corrección inválida permanece visible y bloquea el cambio de sección hasta
+corregirla o recuperar los datos anteriores con el botón del aviso o Escape.
+Las altas y el cambio de titular continúan en la ficha de familia; cada fila
+ofrece «Ver familia» y «Añadir persona».
+
+Los números de familia son referencias estables a los expedientes físicos.
+Borrar una familia no renumera las demás. Una nueva familia recibe el menor
+número positivo libre, incluidos los números liberados por eliminaciones.
+La importación y exportación conservan los números del listado.
+
 Listado permite alternar entre Familias y Personas, conservando la búsqueda.
 En Personas se muestran los datos individuales y se puede abrir la familia para editarla.
 Resumen es de consulta y muestra los totales, familias por tamaño y rangos de edad.

@@ -17,6 +17,16 @@ function cells(bytes) {
   return new Map(Array.from(doc.getElementsByTagNameNS(NS, 'c'), c => [c.getAttribute('r'), c]));
 }
 
+test('exporta referencias de familia con huecos sin renumerarlas', () => {
+  const familias = [{ numero: 42, personas: [person] }, { numero: 12, personas: [person, person] }];
+  const output = unzipSync(buildWorkbook(template, familias));
+  const listado = cells(output['xl/worksheets/sheet1.xml']);
+  const valor = ref => listado.get(ref)?.getElementsByTagNameNS(NS, 'v')[0]?.textContent;
+  assert.equal(valor('A2'), '12');
+  assert.equal(valor('A4'), '42');
+  assert.deepEqual(familias.map(f => f.numero), [42, 12]);
+});
+
 test('conserva todas las partes excepto Listado y propiedades de recálculo', () => {
   const output = unzipSync(buildWorkbook(template, families));
   assert.deepEqual(Object.keys(output).sort(), Object.keys(original).sort());

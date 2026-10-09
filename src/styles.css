@@ -434,8 +434,7 @@ input[aria-invalid="true"]{border-color:#b00020;background:#fff8f8}
   .list-print-card .titular-row>td{background:#f5fafc}
   .list-print-card .titular-row:hover>td{background:#eff7fa}
   .list-print-card .titular-row .family-group-number{background:#f0f7fa}
-  .list-print-card .titular-row input[data-list-field="nombre"],
-  .list-print-card .titular-row input[data-list-field="apellidos"]{background:transparent}
+  .list-print-card .titular-row input[data-list-field]{background:transparent}
   .list-print-card .titular-row.search-match input[data-list-field="nombre"],
   .list-print-card .titular-row.search-match input[data-list-field="apellidos"]{background:#fff6d6}
   .list-print-card .titular-row>td.cell-expired,
@@ -466,4 +465,157 @@ input[aria-invalid="true"]{border-color:#b00020;background:#fff8f8}
   .list-controls .active-list-filters{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:5px 12px;padding:5px 8px;border:1px solid #d8b85e;border-radius:4px;background:#fff4d6;color:#705000;font-size:12px}
   .active-list-filters button{min-height:0;padding:4px 8px;font-size:12px;background:#fff;color:#705000;border:1px solid #d8b85e}
   .active-list-filters button:hover{background:#ffedb7}
+}
+
+/* Accesos rápidos para revisar familias y añadir miembros. */
+@media screen {
+  .list-controls .quick-filters{grid-column:1;grid-row:1;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+  .quick-filters>span{color:#59656d;font-size:12px}
+  .quick-filters button{display:inline-flex;align-items:center;gap:7px;min-height:30px;padding:5px 9px;font-size:12px}
+  .quick-filters strong{padding:1px 6px;border-radius:10px;background:#edf3f6;font-size:12px}
+  .quick-filters button[aria-pressed="true"]{background:#245b7a;border-color:#245b7a;color:#fff}
+  .quick-filters button[aria-pressed="true"] strong{background:#fff;color:#245b7a}
+}
+@media screen and (max-width:760px){
+  .list-controls .quick-filters{grid-column:1;grid-row:1}
+}
+
+@media screen {
+  .list-print-card .list-actions-column{width:38px;min-width:38px;max-width:38px;padding:3px;text-align:center}
+  .list-print-card .list-actions-column button{width:28px;height:28px;min-width:0;min-height:0;margin:0!important;padding:4px}
+}
+
+/* Acciones verticales compactas dentro del cuadro de familia. */
+@media screen {
+  .list-print-card .family-group-number,.list-print-card .family-group-number.family-single{padding:4px 6px;min-width:0}
+  .family-cell-layout{display:flex;align-items:center;justify-content:center;gap:4px}
+  .family-cell-info{flex:none;text-align:center}
+  .family-single .family-label{display:none}
+  .family-cell-info small{margin-top:0;line-height:13px}
+  .family-cell-actions{display:flex;flex-direction:column;align-items:center;gap:2px;flex:none}
+  .list-print-card .family-cell-actions button{position:static;transform:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;min-width:0;min-height:0;margin:0;padding:3px;border-radius:4px}
+  .family-cell-actions .icon{width:16px;height:16px;margin:0;flex:none}
+  .family-cell-actions .family-delete-cross{color:#24485e;background:#fff;border:1px solid #9baeb9}
+  .family-cell-actions .family-delete-cross:hover{background:#f5d6d6;color:#8b2222;border-color:#ca8585}
+}
+@media print{.family-cell-actions{display:none}}
+
+/* Barra inferior del listado y zoom de las celdas. */
+@media screen {
+  .list-bottom-bar{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;background:#f5f8fa;border-top:1px solid #dbe3e8;padding:4px 12px}
+  .list-print-card .list-bottom-bar #counter{padding:0;min-height:0}
+  .list-zoom-controls{display:flex;align-items:center;gap:6px;flex:none}
+  .list-zoom-controls button{display:inline-flex;align-items:center;justify-content:center;min-height:26px;height:26px;min-width:26px;padding:2px 6px;font-size:13px}
+  .list-zoom-controls button:disabled{opacity:.45;cursor:default}
+  .list-zoom-controls input[type=range]{width:120px;min-width:0;height:26px;padding:0;border:0;accent-color:#245b7a;cursor:pointer}
+  .list-print-card table{zoom:var(--list-zoom,1)}
+  #beneficiaryTable th{top:calc(var(--sticky-tools-height,0px) / var(--list-zoom,1))}
+}
+@media screen and (max-width:650px){.list-bottom-bar{flex-wrap:wrap}.list-zoom-controls{margin-left:auto}.list-zoom-controls input[type=range]{width:100px}}
+@media print{.list-zoom-controls{display:none}}
+
+@media screen {
+  .list-print-card td.cell-duplicate{position:relative;background:#fff1df!important;box-shadow:inset 0 -2px #b86c13}
+  .list-print-card td.cell-duplicate input{padding-right:24px}
+  .duplicate-field-warning{position:absolute;right:6px;top:50%;transform:translateY(-50%);color:#985313;font-size:15px;cursor:help}
+}
+@media print{.duplicate-field-warning{display:none}}
+.pending-show-families{min-height:34px;margin:0 0 8px;padding:6px 10px;font-size:12px}
+
+/* Avisos con detalle acotado para dejar espacio a la tabla. */
+@media screen {
+  .duplicate-alert{margin-top:6px;padding:7px 10px;font-size:12px}
+  .duplicate-alert details ul{max-height:min(18vh,150px);overflow-y:auto;overscroll-behavior:contain;padding-right:8px}
+  .pending-actions [data-pending-list]{max-height:min(22vh,190px);overflow-y:auto;overscroll-behavior:contain}
+  .active-list-filters .show-all-families{min-height:32px;padding:6px 12px;background:#245b7a;color:#fff;border:1px solid #245b7a;font-size:13px}
+  .active-list-filters .show-all-families:hover{background:#153e55;color:#fff}
+}
+
+@media screen {
+  .list-controls .active-list-filters{grid-column:1 / -1;display:inline-flex;width:fit-content;max-width:100%;justify-content:flex-start;align-items:center;gap:8px;padding:4px 6px}
+  .active-list-filters>span{max-width:min(68vw,720px);overflow-wrap:anywhere}
+  .active-list-filters .show-all-families{flex:none;min-height:28px;padding:4px 9px;white-space:nowrap;font-size:12px}
+}
+@media screen and (max-width:650px){
+  .list-controls .active-list-filters{flex-wrap:wrap}
+  .active-list-filters>span{max-width:100%}
+}
+
+/* Acciones pendientes sigue la presentación compacta del aviso de filtros. */
+@media screen {
+  .list-controls .pending-actions{grid-column:1 / -1;width:fit-content;max-width:min(100%,900px);margin:0;border:1px solid #d8c58c;border-radius:6px;background:#fffaf0;color:#594819}
+  .pending-actions>summary{display:flex;align-items:center;gap:6px;padding:5px 9px;list-style:none;white-space:nowrap}
+  .pending-actions>summary::-webkit-details-marker{display:none}
+  .pending-actions>summary::before{content:'▸';color:#815c00}
+  .pending-actions[open]>summary::before{content:'▾'}
+  .pending-actions[open]>summary{border-bottom:1px solid #eadfbf}
+  .pending-actions .pending-count{min-width:22px;height:22px;margin-left:2px;background:#f0e1b3;font-weight:700}
+  .pending-actions [data-pending-list]{width:min(760px,calc(100vw - 64px));max-height:min(22vh,190px);padding:8px 10px;overflow:auto}
+  .pending-actions .pending-group h3{margin:0 0 5px;font-size:12px}
+  .pending-actions .pending-group+.pending-group{margin-top:8px;padding-top:7px}
+  .pending-actions .pending-show-families{min-height:30px;margin-bottom:7px;padding:5px 10px;font-size:12px}
+  .pending-actions li{font-size:12px;line-height:1.45}
+}
+
+.excel-drop-zone{display:flex;flex-direction:column;align-items:center;gap:8px;margin-top:18px;padding:24px 16px;border:2px dashed #9baeb9;border-radius:8px;background:#f5f8fa;text-align:center;color:#24485e}
+.excel-drop-zone>span:last-child{font-size:13px;color:#59656d}
+.excel-drop-zone .drop-icon .icon{width:30px;height:30px}
+.excel-drop-zone.drag-over{border-color:#245b7a;background:#e4eff5;box-shadow:inset 0 0 0 1px #245b7a}
+
+@media screen {
+  .list-print-card .cell-validity input{width:110px;min-width:110px;display:inline-block;vertical-align:middle}
+  .validity-days{display:inline-block;vertical-align:middle;margin-left:4px;padding:3px 6px;border-radius:4px;font-size:11px;line-height:1.3;font-weight:600}
+  .validity-days[hidden]{display:none}
+}
+@media print{.validity-days{display:none}}
+
+/* Fechas ajustadas a su contenido para dedicar espacio a nombres y apellidos. */
+@media screen {
+  #beneficiaryTable th:has([data-column="nacimiento"]),
+  #beneficiaryTable th:has([data-column="derivacion"]),
+  #beneficiaryTable th:has([data-column="vigencia"]),
+  #beneficiaryTable th:has([data-column="proximaCita"]),
+  #beneficiaryTable td:has(input[data-list-field="nacimiento"]),
+  #beneficiaryTable td:has(input[data-list-field="derivacion"]),
+  #beneficiaryTable td:has(input[data-list-field="vigencia"]),
+  #beneficiaryTable td:has(input[data-list-field="proximaCita"]){width:1%;padding-left:4px;padding-right:4px}
+  .list-print-card input[data-list-field="nacimiento"],
+  .list-print-card input[data-list-field="derivacion"],
+  .list-print-card input[data-list-field="vigencia"],
+  .list-print-card input[data-list-field="proximaCita"]{width:94px;min-width:94px;padding-left:4px;padding-right:4px}
+}
+
+@media screen {
+  #beneficiaryTable th:has([data-column="edad"]),
+  #beneficiaryTable .age-cell{width:1%;min-width:42px;padding-left:4px;padding-right:4px;text-align:center}
+  #beneficiaryTable th:has([data-column="documento"]),
+  #beneficiaryTable td:has(input[data-list-field="documento"]){width:1%;padding-left:4px;padding-right:4px}
+  .list-print-card input[data-list-field="documento"]{width:112px;min-width:112px;padding-left:4px;padding-right:4px}
+  #beneficiaryTable .shared-date-empty{width:1%;padding:0}
+}
+@media screen {
+  .list-minor-toggle{display:inline-flex;align-items:center;gap:3px;margin:0 0 0 3px;font-size:11px;font-weight:normal;vertical-align:middle;cursor:pointer}
+  .list-minor-toggle input[type=checkbox]{width:13px;height:13px;min-width:0;margin:0;padding:0;accent-color:#245b7a}
+}
+@media print{.list-minor-toggle{display:none}}
+
+/* Un único espacio reúne los filtros y las tareas por revisar. */
+@media screen {
+  .list-controls .pending-workspace{grid-column:1;grid-row:1;min-width:0;border:1px solid #dbe3e8;border-radius:6px;background:#f5f8fa;padding:6px 8px}
+  .pending-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px}
+  .pending-title{color:#24485e;font-size:12px}
+  .pending-workspace .quick-filters{display:flex;flex-wrap:wrap;gap:5px}
+  .pending-workspace [data-pending-overview]{display:flex;align-items:center}
+  .pending-workspace .pending-show-families{margin:0;min-height:30px;padding:5px 9px}
+  .pending-clear{font-size:12px;color:#47705a}
+  .pending-workspace .pending-actions{margin:5px 0 0;max-width:100%;width:fit-content;background:#fff;border:1px solid #dbe3e8;color:#24485e}
+  .pending-workspace .pending-actions>summary{padding:4px 7px;font-size:12px}
+  .pending-workspace .pending-actions [data-pending-list]{max-width:100%;width:min(680px,calc(100vw - 90px))}
+}
+@media screen and (max-width:760px){.list-controls .pending-workspace{grid-column:1;grid-row:1}}
+@media print{.pending-workspace{display:none}}
+
+@media screen {
+  #beneficiaryTable tbody td:has([data-list-field]:focus){position:relative;z-index:13}
+  #beneficiaryTable [data-list-field]:focus{position:relative;z-index:14;outline:2px solid #245b7a;outline-offset:-2px;box-shadow:0 0 0 2px #fff}
 }

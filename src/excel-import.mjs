@@ -123,7 +123,8 @@ export function importWorkbook(bytes) {
       continue;
     }
     const birthDate = parsedDates[0] || '';
-    const minor = !current.personas.length ? false : esMenor(birthDate);
+    const minor = Boolean(current.personas.length) && (esMenor(birthDate) || (!birthDate && nombre.toLocaleUpperCase('es') === 'MENOR'));
+    const nombreGuardado = minor && nombre.toLocaleUpperCase('es') === 'MENOR' ? '' : nombre;
     const missing = [!nombre && !minor && "nombre", !apellidos && !minor && "apellidos", !documento && !current.personas.length && "documento"].filter(Boolean);
     if (missing.length) {
       issues.push({ ...referencia, row: rowNumber, reason: `falta ${missing.join(", ")}` });
@@ -133,7 +134,7 @@ export function importWorkbook(bytes) {
       id: crypto.randomUUID(),
       titular: current.personas.length === 0,
       menor: minor,
-      nombre,
+      nombre: nombreGuardado,
       apellidos,
       documento,
       nacimiento: birthDate,

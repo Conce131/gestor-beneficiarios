@@ -1,19 +1,20 @@
 import { erroresFamilia } from './validacion.mjs';
 
 export function editarPersona(familia, personaId, campo, valor, hoy = new Date()) {
-  if (!['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita'].includes(campo)) {
+  if (!['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita', 'menor'].includes(campo)) {
     throw new Error('Este dato no se puede editar en el listado.');
   }
   const copia = structuredClone(familia);
   const persona = copia.personas.find(p => p.id === personaId);
   if (!persona) throw new Error('No se encontró la persona.');
+  if (campo === 'menor' && persona.titular) throw new Error('El titular no puede marcarse como menor.');
   persona[campo] = valor;
   if (campo === 'derivacion' || campo === 'vigencia') copia.personas.forEach(p => p[campo] = valor);
   if (campo === 'nacimiento') {
     const fecha = new Date(`${valor}T00:00:00`);
     let edad = hoy.getFullYear() - fecha.getFullYear();
     if (hoy.getMonth() < fecha.getMonth() || (hoy.getMonth() === fecha.getMonth() && hoy.getDate() < fecha.getDate())) edad--;
-    persona.menor = !persona.titular && Boolean(valor) && edad < 18;
+    persona.menor = !persona.titular && (valor ? edad < 18 : Boolean(persona.menor));
   }
   const errores = erroresFamilia(copia, hoy, { permitirIncompletos: true });
   if (errores.length) throw new Error(errores[0].mensaje);

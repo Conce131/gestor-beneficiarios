@@ -12,8 +12,6 @@ export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos 
         if (campo === 'documento' && !persona.titular) continue;
         if (!String(persona[campo] ?? '').trim()) error(campo, `Completa ${etiqueta} de ${persona.titular ? 'la persona titular' : `la persona ${indice + 1}`}.`);
       }
-    } else if (!permitirIncompletos && menor && !persona.nacimiento) {
-      error('nacimiento', `Indica la fecha de nacimiento del menor ${indice + 1}.`);
     }
     if (!permitirIncompletos && persona.titular && !String(persona.nacimiento ?? '').trim()) {
       error('nacimiento', 'Completa la fecha de nacimiento de la persona titular.');

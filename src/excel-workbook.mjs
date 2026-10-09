@@ -74,7 +74,7 @@ export function buildWorkbook(templateBytes, familias, reparto) {
       write(`C${row}`, person.menor && !String(person.nombre ?? "").trim() ? "MENOR" : excelName(person.nombre), true);
       write(`D${row}`, excelName(person.apellidos), true);
       write(`E${row}`, String(person.documento ?? "").trim().toLocaleUpperCase("es-ES"), true);
-      for (const [column, field] of [["F", "nacimiento"], ["H", "derivacion"], ["I", "vigencia"], ["L", "proximaCita"]]) {
+      for (const [column, field] of [["F", "nacimiento"], ["H", "derivacion"], ["I", "vigencia"], ...(person.titular ? [["L", "proximaCita"]] : [])]) {
         write(`${column}${row}`, excelDate(person[field]));
       }
       // G, J y K mantienen las fórmulas oficiales, también en filas vacías.

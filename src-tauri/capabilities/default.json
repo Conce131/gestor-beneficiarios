@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Permisos básicos de la ventana principal",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-text-file", "fs:allow-write-text-file", "fs:allow-write-file", "opener:allow-open-path", "store:allow-load", "store:allow-get", "store:allow-set", "store:allow-save"]
+  "permissions": ["core:default", "core:window:allow-minimize", "core:window:allow-toggle-maximize", "dialog:allow-open", "dialog:allow-save", "fs:allow-read-file", "fs:allow-read-text-file", "fs:allow-write-text-file", "fs:allow-write-file", "opener:allow-open-path", "store:allow-load", "store:allow-get", "store:allow-set", "store:allow-save"]
 }

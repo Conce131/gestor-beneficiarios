@@ -1,5 +1,20 @@
 export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva'];
 export const MAX_REPARTO_FILAS = 16;
+// Las fechas compartidas y las citas no identifican a un beneficiario.
+// Un menor sin nombre sí cuenta cuando tiene fecha de nacimiento.
+export function tieneDatosBeneficiario(persona) {
+  return Boolean(persona.menor && !persona.titular) || ['nombre', 'apellidos', 'documento', 'nacimiento'].some(campo => String(persona[campo] ?? '').trim());
+}
+export function miembrosContabilizados(familia) {
+  return familia.personas.filter(tieneDatosBeneficiario).length;
+}
+export function familiasParaExportar(familias) {
+  return familias.filter(f => f.personas.some(tieneDatosBeneficiario)).map(f => ({
+    ...f,
+    // Conservar un titular incompleto para que la validación bloquee su exportación.
+    personas: f.personas.filter(p => p.titular || tieneDatosBeneficiario(p)),
+  }));
+}
 export function prepararReparto(datos) {
   if (datos == null) return alimentos.map(nombre => ({ nombre, cantidad: "" }));
   const filas = validarReparto(datos);
@@ -9,6 +24,7 @@ export function prepararReparto(datos) {
   return antiguo ? filas.slice(0, alimentos.length) : filas;
 }
 export function resumen(familias, hoy = new Date()) {
+  familias = familias.map(f => ({ ...f, personas: f.personas.filter(tieneDatosBeneficiario) })).filter(f => f.personas.length);
   const personas = familias.flatMap(f => f.personas);
   const tamanos = Array.from({length:10}, (_, i) => familias.filter(f => f.personas.length === i + 1).length);
   const fecha = anos => new Date(hoy.getFullYear() - anos, hoy.getMonth(), hoy.getDate());

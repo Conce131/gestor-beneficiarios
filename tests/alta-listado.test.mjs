@@ -24,7 +24,7 @@ test('borrar una familia libera su número para la siguiente alta', () => {
 });
 
 test('añade el adulto debajo, conservando datos y fechas actuales de la familia', () => {
-  const next = incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', documento: '', nacimiento: '1990-01-01', vigencia: '2000-01-01' } }, hoy);
+  const next = incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', documento: 'TEST-LUIS', nacimiento: '1990-01-01', vigencia: '2000-01-01' } }, hoy);
   assert.equal(next[0].personas.length, 2);
   assert.equal(next[0].personas[1].titular, false);
   assert.equal(next[0].personas[1].vigencia, '2027-01-01');
@@ -40,8 +40,8 @@ test('permite un menor con nacimiento y sin nombre ni documento', () => {
 
 test('rechaza filas incompletas y fechas inválidas sin alterar datos guardados', () => {
   assert.throws(() => incorporarAlta(familias, { id: 'n', persona: { id: 'p', nombre: 'Ana', apellidos: '', documento: '' } }, hoy), /Completa/);
-  assert.throws(() => incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', nacimiento: '2026-02-30' } }, hoy), /fecha válida/);
-  assert.throws(() => incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', nacimiento: '2027-01-01' } }, hoy), /futura/);
+  assert.throws(() => incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', documento: 'TEST-LUIS', nacimiento: '2026-02-30' } }, hoy), /fecha válida/);
+  assert.throws(() => incorporarAlta(familias, { familiaId: 'f', persona: { id: 'p', nombre: 'Luis', apellidos: 'Prueba', documento: 'TEST-LUIS', nacimiento: '2027-01-01' } }, hoy), /futura/);
   assert.throws(() => incorporarAlta(familias, { familiaId: 'inexistente', persona: { id: 'p' } }, hoy), /ya no existe/);
   assert.throws(() => incorporarAlta(familias, { familiaId: 'f', persona: titular }, hoy), /ya se ha añadido/);
   assert.equal(familias[0].personas.length, 1);
@@ -53,8 +53,8 @@ test('una familia vacía se conserva y se completa casilla a casilla', () => {
   let recuperada = JSON.parse(JSON.stringify(next)).find(f => f.id === 'n');
   assert.equal(recuperada.numero, 1);
   assert.equal(recuperada.personas[0].titular, true);
-  assert.deepEqual(datosPendientesFamilia(recuperada, hoy)[0].campos, ['nombre', 'apellidos', 'documento']);
-  for (const [campo, valor] of [['nombre', 'Ana'], ['apellidos', 'Prueba'], ['documento', 'TEST']]) {
+  assert.deepEqual(datosPendientesFamilia(recuperada, hoy)[0].campos, ['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia']);
+  for (const [campo, valor] of [['nombre', 'Ana'], ['apellidos', 'Prueba'], ['documento', 'TEST'], ['nacimiento', '1980-01-01'], ['derivacion', '2026-01-01'], ['vigencia', '2027-01-01']]) {
     recuperada = editarPersona(recuperada, 'p', campo, valor, hoy);
   }
   assert.deepEqual(datosPendientesFamilia(recuperada, hoy), []);

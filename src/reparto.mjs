@@ -1,7 +1,7 @@
 export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva'];
 export const MAX_REPARTO_FILAS = 16;
 // Las fechas compartidas y las citas no identifican a un beneficiario.
-// Un menor sin nombre sí cuenta cuando tiene fecha de nacimiento.
+// Un menor declarado cuenta aunque falten su nombre y su fecha de nacimiento.
 export function tieneDatosBeneficiario(persona) {
   return Boolean(persona.menor && !persona.titular) || ['nombre', 'apellidos', 'documento', 'nacimiento'].some(campo => String(persona[campo] ?? '').trim());
 }
@@ -34,7 +34,8 @@ export function resumen(familias, hoy = new Date()) {
     const n = new Date(p.nacimiento + 'T00:00:00');
     return n >= fecha(desde) && n < fecha(hasta);
   }).length);
-  return {personas:personas.length, familias:familias.length, tamanos, edades,
+  const menoresSinNacimiento = personas.filter(p => p.menor && !p.titular && !String(p.nacimiento ?? '').trim()).length;
+  return {personas:personas.length, familias:familias.length, tamanos, edades, menoresSinNacimiento,
     fuera:familias.filter(f => f.personas.length > 10).length,
     sinRango:personas.length - edades.reduce((a,b)=>a+b,0)};
 }

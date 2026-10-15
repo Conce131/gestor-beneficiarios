@@ -25,7 +25,7 @@ test('lee fechas DD/MM/AAAA con apóstrofo de Excel, y valida el calendario y lo
 });
 
 test("importa familias y miembros desde la hoja Listado de la plantilla", () => {
-  const excel = buildWorkbook(template, families);
+  const excel = buildWorkbook(template, families.map(f => ({ ...f, personas: f.personas.map((p, i) => ({ ...p, titular: i === 0 })) })));
   const imported = importWorkbook(excel);
   assert.deepEqual(imported.map(f => f.numero), [2, 5]);
   assert.deepEqual(imported.map(f => f.personas.length), [1, 2]);

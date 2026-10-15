@@ -9,12 +9,23 @@ export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos 
     const menor = persona.menor && !persona.titular;
     if (!permitirIncompletos && !menor) {
       for (const [campo, etiqueta] of [['nombre', 'nombre'], ['apellidos', 'apellidos'], ['documento', 'documento']]) {
-        if (campo === 'documento' && !persona.titular) continue;
         if (!String(persona[campo] ?? '').trim()) error(campo, `Completa ${etiqueta} de ${persona.titular ? 'la persona titular' : `la persona ${indice + 1}`}.`);
       }
     }
-    if (!permitirIncompletos && persona.titular && !String(persona.nacimiento ?? '').trim()) {
-      error('nacimiento', 'Completa la fecha de nacimiento de la persona titular.');
+    if (!permitirIncompletos && !menor && !String(persona.nacimiento ?? '').trim()) {
+      error('nacimiento', `Completa la fecha de nacimiento de ${persona.titular ? 'la persona titular' : `la persona ${indice + 1}`}.`);
+    }
+    if (!permitirIncompletos && persona.titular && !String(persona.derivacion ?? '').trim()) {
+      error('derivacion', 'Completa la fecha de derivación de la persona titular.');
+    }
+    if (!permitirIncompletos && persona.titular && !String(persona.vigencia ?? '').trim()) {
+      error('vigencia', 'Completa la fecha de vigencia de la persona titular.');
+    }
+    if (!permitirIncompletos && persona.titular && persona.vigencia && new Date(`${persona.vigencia}T23:59:59.999`) < hoy) {
+      const cita = persona.proximaCita;
+      const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
+      if (!String(cita ?? '').trim()) error('proximaCita', 'La vigencia está caducada. Completa la próxima cita.');
+      else if (new Date(`${cita}T00:00:00`) < inicioHoy) error('proximaCita', 'La cita ya pasó. Anota una próxima cita vigente.');
     }
     for (const campo of ['nacimiento', 'derivacion', 'vigencia', 'proximaCita']) {
       const valor = persona[campo];
@@ -31,6 +42,7 @@ export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos 
         if (hoy.getMonth() < fecha.getMonth() || (hoy.getMonth() === fecha.getMonth() && hoy.getDate() < fecha.getDate())) edad--;
         if (menor && edad >= 18) error(campo, 'Esta persona es mayor de edad. Completa sus datos como adulto.');
       }
+      if (campo === 'derivacion' && fecha > hoy) error(campo, 'La fecha de derivación no puede ser futura.');
     }
   }
   return errores;

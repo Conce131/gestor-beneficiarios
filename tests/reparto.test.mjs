@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {resumen, envases, validarReparto, prepararReparto, alimentos} from '../src/reparto.mjs';
 
 test('Reparto usa familias de 1 a 10, divide por personas y redondea por tamaño',()=>{
- const r=resumen([1,2,2,11].map(n=>({personas:Array.from({length:n},()=>({}))})));
+ const r=resumen([1,2,2,11].map(n=>({personas:Array.from({length:n},()=>({nombre:'Persona de prueba'}))})));
  assert.equal(r.personas,16);
  assert.deepEqual(r.tamanos.slice(0,3),[1,2,0]);
  assert.equal(r.fuera,1);
@@ -16,7 +16,7 @@ test('Reparto usa familias de 1 a 10, divide por personas y redondea por tamaño
 
 test('Resumen conserva los extremos inclusivos y exclusivos de COUNTIFS',()=>{
  const nacimientos=['2026-10-05','2023-10-05','2008-10-05','1926-10-05','1926-10-04',''];
- const r=resumen([{personas:nacimientos.map(nacimiento=>({nacimiento}))}],new Date(2026,9,5));
+ const r=resumen([{personas:nacimientos.map(nacimiento=>({nombre:'Persona de prueba',nacimiento}))}],new Date(2026,9,5));
  assert.deepEqual(r.edades,[1,1,1]);
  assert.equal(r.sinRango,3);
 });
@@ -42,4 +42,12 @@ test('La migración retira los huecos antiguos sin borrar alimentos personalizad
  antiguo[15].cantidad = 20;
  assert.deepEqual(prepararReparto(antiguo), antiguo);
  assert.equal(antiguo.length, 16);
+});
+
+test('Los menores sin nacimiento cuentan en el total pero no en un rango de edad', () => {
+ const r = resumen([{ personas: [{ menor: true }, { menor: true, nacimiento: '2016-01-01' }, { nombre: 'Adulto' }] }], new Date(2026, 9, 5));
+ assert.equal(r.personas, 3);
+ assert.equal(r.menoresSinNacimiento, 1);
+ assert.deepEqual(r.edades, [0, 1, 0]);
+ assert.equal(r.sinRango - r.menoresSinNacimiento, 1);
 });

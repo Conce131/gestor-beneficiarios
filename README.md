@@ -701,3 +701,20 @@ Los nombres y cantidades se guardan en `reparto.json` en Tauri (en localStorage
 cuando se abre en navegador) y se escriben solo en las celdas editables B15:C30
 al generar Excel. Las fórmulas se conservan. Al cargar un Excel se importan las
 familias de la hoja Listado; los datos de Reparto no se importan.
+
+
+## Versión 1.2.4 — revisión de escritorio (14/10/2026)
+
+- La imagen del Resumen se convierte directamente a bytes PNG, sin `fetch(data:...)`,
+  que estaba bloqueado por la política de seguridad de escritorio.
+- La importación del Excel y la eliminación de alimentos esperan la confirmación
+  nativa: pulsar Cancelar ya no permite continuar la operación.
+- La entrada del número de miembros y la confirmación escrita BORRAR utilizan
+  un formulario de la aplicación en escritorio. Los avisos usan el diálogo nativo.
+- Se valida el PNG generado y se bloquean pulsaciones repetidas mientras se guarda.
+
+Instalador: `GestorBeneficiarios-1.2.4-Windows-setup.exe`. Se genera con
+`npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc -- --offline`
+cuando las herramientas y dependencias de compilación cruzada ya están instaladas.
+Las pruebas automatizadas no sustituyen la comprobación de instalación y descarga
+en Windows.

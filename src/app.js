@@ -540,6 +540,34 @@ function listNotice(message) {
     notice.textContent = message;
   }
 }
+function actualizarEdadListado(input, person) {
+  if (!person) return;
+  const row = input.closest('tr');
+  const calculada = edad(person.nacimiento);
+  row.querySelector('.age-cell').textContent = calculada === '' ? '—' : calculada;
+  const check = row.querySelector('[data-list-minor]');
+  if (check) check.checked = Boolean(person.menor);
+  const nombre = row.querySelector('[data-list-field="nombre"]');
+  if (nombre) {
+    nombre.placeholder = person.menor ? 'MENOR' : '';
+    nombre.previousElementSibling.textContent = nombre.value || (person.menor ? 'MENOR' : '—');
+  }
+}
+
+function previsualizarEdadListado(input) {
+  const family = familias.find(f => f.id === input.dataset.familyId);
+  const original = family?.personas.find(p => p.id === input.dataset.personId);
+  if (!original) return;
+  let person = original;
+  const fecha = parseTypedDate(input.value.trim());
+  if (fecha) {
+    try {
+      person = editarPersona(family, original.id, 'nacimiento', fecha).personas.find(p => p.id === original.id);
+    } catch { /* Una fecha inválida conserva la condición guardada. */ }
+  }
+  actualizarEdadListado(input, person);
+}
+
 async function guardarCelda(input) {
   if (!listDrafts.has(listKey(input))) return;
   const f = familias.find(f => f.id === input.dataset.familyId);
@@ -578,20 +606,7 @@ async function guardarCelda(input) {
         }
       });
     }
-    if (campo === 'nacimiento') {
-      const ageCell = input.closest('td').nextElementSibling;
-      const calculada = edad(valor);
-      ageCell.textContent = calculada === '' ? '—' : calculada;
-      const row = input.closest('tr');
-      const menor = copia.personas.find(p => p.id === input.dataset.personId)?.menor;
-      const check = row.querySelector('[data-list-minor]');
-      if (check) check.checked = Boolean(menor);
-      const nombre = row.querySelector('[data-list-field="nombre"]');
-      if (nombre) {
-        nombre.placeholder = menor ? 'MENOR' : '';
-        nombre.previousElementSibling.textContent = nombre.value || (menor ? 'MENOR' : '—');
-      }
-    }
+    if (campo === 'nacimiento') actualizarEdadListado(input, copia.personas.find(p => p.id === input.dataset.personId));
     const pendientesDatos = datosPendientesFamilia(copia);
     app.querySelectorAll('[data-row-family]').forEach(row => {
       if (row.dataset.rowFamily !== copia.id) return;
@@ -1390,6 +1405,7 @@ app.addEventListener("input", async event => {
     if (target.getAttribute('aria-invalid') === 'true' || (listDates.has(target.dataset.listField) && target.value.trim() && target.value.trim().length >= 8)) validarFechaLista(target, true);
     else { target.removeAttribute('aria-invalid'); target.setCustomValidity(''); delete target.dataset.fieldError; }
     actualizarAvisoCampo(target);
+    if (target.dataset.listField === 'nacimiento') previsualizarEdadListado(target);
     setSaveState(target.getAttribute('aria-invalid') === 'true' ? 'Corrige esta fecha.' : 'El dato se guardará al salir de la casilla.', 'pending');
     return;
   }

@@ -63,3 +63,15 @@ test('un identificador duplicado no permite borrar varias filas por accidente', 
   assert.throws(() => eliminarMiembro(duplicada, 'b'), /duplicado/);
   assert.equal(duplicada.personas.length, 3);
 });
+
+
+test('la fecha activa menor automáticamente hasta el día anterior a cumplir 18', () => {
+  const original = structuredClone(familia);
+  original.personas[1].menor = false;
+  const menor = editarPersona(original, 'b', 'nacimiento', '2008-10-08', hoy);
+  assert.equal(menor.personas[1].menor, true);
+  assert.equal(original.personas[1].menor, false);
+  const adulto = editarPersona(menor, 'b', 'nacimiento', '2008-10-07', hoy);
+  assert.equal(adulto.personas[1].menor, false);
+  assert.equal(editarPersona(original, 'a', 'nacimiento', '2016-01-01', hoy).personas[0].menor, false);
+});

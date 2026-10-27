@@ -20,6 +20,8 @@ export function incorporarAlta(familias, alta, hoy = new Date(), opciones = {}) 
     nueva.titular = false;
     nueva.derivacion = titular.derivacion;
     nueva.vigencia = titular.vigencia;
+    nueva.serviciosSociales = titular.serviciosSociales !== false;
+    nueva.serviciosSocialesConfigurado = true;
   } else nueva.titular = true;
   copia.personas.push(nueva);
   const errores = erroresFamilia(copia, hoy, opciones);

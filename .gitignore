@@ -14,6 +14,7 @@ src-tauri/gen/schemas/
 /listado-prueba-100-personas.xlsx
 /listado-prueba-20-personas.xlsx
 /src-tauri/*.xlsx
+/src-tauri/output.pdf
 
 # Iconos generados para plataformas y tamaños que esta compilación no usa.
 /src-tauri/icons/android/
@@ -23,3 +24,29 @@ src-tauri/gen/schemas/
 /src-tauri/icons/Square*.png
 /src-tauri/icons/StoreLogo.png
 /src-tauri/icons/icon.png
+
+# Archivos locales de trabajo, configuración privada y temporales.
+/Ignorar carpeta/
+/.aws/
+/.codex/
+/.agents/
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+~$*
+.~lock.*#
+
+# Excel: conservar las dos plantillas de la app y la de compatibilidad de las pruebas.
+/*.xlsx
+!/MODELO RESUMEN MENSUAL.xlsx
+!/Modelo  listado v(2.0).xlsx
+!/Modelo  listado v(1.4).xlsx
+
+# Instaladores y paquetes de distribución generados.
+/*.exe
+/*.msi
+/*.zip

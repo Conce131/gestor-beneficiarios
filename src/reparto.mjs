@@ -1,5 +1,7 @@
+import { motivoExclusion, diaFecha, diaHoy } from './vigencia.mjs';
 export const alimentos = ['Leche', 'Harinas y gofio', 'Arroz', 'Pasta', 'Legumbres', 'Salsas variadas', 'Aceites', 'Pescado en conserva', 'Carne en conserva'];
 export const MAX_REPARTO_FILAS = 16;
+export const AVISO_RECUENTO_REPARTO = 'Las familias cuentan en Resumen y Reparto durante los primeros 90 días desde el vencimiento, incluido el día 90, con o sin cita. Desde el día 91 quedan excluidas aunque tengan cita. También se excluyen si falta una vigencia válida. La próxima cita sirve para seguir la renovación y puede ser anterior al vencimiento.';
 // Las fechas compartidas y las citas no identifican a un beneficiario.
 // Un menor declarado cuenta aunque falten su nombre y su fecha de nacimiento.
 export function tieneDatosBeneficiario(persona) {
@@ -23,24 +25,30 @@ export function prepararReparto(datos) {
     && filas.slice(alimentos.length).every(fila => fila.nombre === "VARIOS" && fila.cantidad === "");
   return antiguo ? filas.slice(0, alimentos.length) : filas;
 }
-export function resumen(familias, hoy = new Date()) {
+export function resumen(familias, hoy = new Date(), { filtrarVigencia = true } = {}) {
+  if (filtrarVigencia) familias = familias.filter(f => !motivoExclusion(f, hoy));
   familias = familias.map(f => ({ ...f, personas: f.personas.filter(tieneDatosBeneficiario) })).filter(f => f.personas.length);
   const personas = familias.flatMap(f => f.personas);
   const tamanos = Array.from({length:10}, (_, i) => familias.filter(f => f.personas.length === i + 1).length);
-  const fecha = anos => new Date(hoy.getFullYear() - anos, hoy.getMonth(), hoy.getDate());
-  // Límites exactos de las fórmulas DATE/COUNTIFS de Resumen (incluido el extremo inferior).
-  const edades = [[3, 0], [18, 3], [100, 18]].map(([desde, hasta]) => personas.filter(p => {
-    if (!p.nacimiento) return false;
-    const n = new Date(p.nacimiento + 'T00:00:00');
-    return n >= fecha(desde) && n < fecha(hasta);
-  }).length);
+  // La plantilla 2.0 agrupa por años cumplidos (DATEDIF), con ambos extremos incluidos.
+  const edades = [0, 0, 0];
+  const mesDiaHoy = `${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+  for (const persona of personas) {
+    const nacimiento = diaFecha(persona.nacimiento);
+    if (!Number.isFinite(nacimiento) || nacimiento > diaHoy(hoy)) continue;
+    const edad = hoy.getFullYear() - Number(persona.nacimiento.slice(0, 4))
+      - Number(persona.nacimiento.slice(5) > mesDiaHoy);
+    if (edad <= 2) edades[0]++;
+    else if (edad <= 18) edades[1]++;
+    else if (edad <= 100) edades[2]++;
+  }
   const menoresSinNacimiento = personas.filter(p => p.menor && !p.titular && !String(p.nacimiento ?? '').trim()).length;
   return {personas:personas.length, familias:familias.length, tamanos, edades, menoresSinNacimiento,
     fuera:familias.filter(f => f.personas.length > 10).length,
     sinRango:personas.length - edades.reduce((a,b)=>a+b,0)};
 }
 export function envases(cantidad, miembros, familias, total) {
-  if (!familias || !total) return null;
+  if (cantidad === '' || !familias || !total) return null;
   return Math.round(Number(cantidad) / total * miembros);
 }
 export function validarReparto(datos) {

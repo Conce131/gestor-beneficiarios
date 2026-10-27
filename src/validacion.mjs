@@ -1,3 +1,5 @@
+import { vigenciaAplicada, errorProximaCita, diaFecha, diaHoy } from './vigencia.mjs';
+
 export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos = false } = {}) {
   const errores = [];
   const personas = familia.personas ?? [];
@@ -18,14 +20,18 @@ export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos 
     if (!permitirIncompletos && persona.titular && !String(persona.derivacion ?? '').trim()) {
       error('derivacion', 'Completa la fecha de derivación de la persona titular.');
     }
-    if (!permitirIncompletos && persona.titular && !String(persona.vigencia ?? '').trim()) {
+    if (!permitirIncompletos && persona.titular && !String(vigenciaAplicada(persona)).trim()) {
       error('vigencia', 'Completa la fecha de vigencia de la persona titular.');
     }
-    if (!permitirIncompletos && persona.titular && persona.vigencia && new Date(`${persona.vigencia}T23:59:59.999`) < hoy) {
+    if (!permitirIncompletos && persona.titular && diaFecha(vigenciaAplicada(persona)) < diaHoy(hoy)) {
       const cita = persona.proximaCita;
       const inicioHoy = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
       if (!String(cita ?? '').trim()) error('proximaCita', 'La vigencia está caducada. Completa la próxima cita.');
       else if (new Date(`${cita}T00:00:00`) < inicioHoy) error('proximaCita', 'La cita ya pasó. Anota una próxima cita vigente.');
+    }
+    if (!permitirIncompletos && persona.proximaCita) {
+      const mensaje = errorProximaCita(personas.find(p => p.titular), persona.proximaCita, hoy);
+      if (mensaje && !errores.some(e => e.indice === indice && e.campo === 'proximaCita')) error('proximaCita', mensaje);
     }
     for (const campo of ['nacimiento', 'derivacion', 'vigencia', 'proximaCita']) {
       const valor = persona[campo];
@@ -33,7 +39,7 @@ export function erroresFamilia(familia, hoy = new Date(), { permitirIncompletos 
       const fecha = new Date(`${valor}T00:00:00`);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(valor) || !Number.isFinite(fecha.getTime()) || fecha.getFullYear() < 1900
         || fecha.getFullYear() !== Number(valor.slice(0, 4)) || fecha.getMonth() + 1 !== Number(valor.slice(5, 7)) || fecha.getDate() !== Number(valor.slice(8, 10))) {
-        error(campo, 'Indica una fecha válida.');
+        if (!errores.some(e => e.indice === indice && e.campo === campo)) error(campo, 'Indica una fecha válida.');
         continue;
       }
       if (campo === 'nacimiento') {

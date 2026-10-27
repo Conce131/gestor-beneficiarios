@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { estado } from '../src/estado-familia.mjs';
+import { estado, descripcionEstado } from '../src/estado-familia.mjs';
 import { erroresFamilia } from '../src/validacion.mjs';
 import { editarPersona } from '../src/edicion-listado.mjs';
 
@@ -21,7 +21,7 @@ test('Los documentos de adultos y las fechas compartidas son obligatorios', () =
   assert.equal(estado(f, hoy)[0], 'ok');
 });
 
-test('La vigencia caducada solo está correcta con cita válida de hoy o futura', () => {
+test('La vigencia sigue caducada aunque tenga una próxima cita válida', () => {
   for (const proximaCita of ['', '2026-10-13', '2026-02-30']) {
     const f = familia({ vigencia: '2026-10-01', proximaCita });
     assert.equal(estado(f, hoy)[0], 'expired');
@@ -29,8 +29,26 @@ test('La vigencia caducada solo está correcta con cita válida de hoy o futura'
   }
   for (const proximaCita of ['2026-10-14', '2026-10-15']) {
     const f = familia({ vigencia: '2026-10-01', proximaCita });
-    assert.deepEqual(estado(f, hoy), ['ok', 'Correcta']);
+    assert.deepEqual(estado(f, hoy), ['expired', 'Caducada']);
     assert.deepEqual(erroresFamilia(f, hoy), []);
+  }
+});
+
+test('Servicios sociales No utiliza la vigencia automática para el estado', () => {
+  const f = familia({ serviciosSociales: false, derivacion: '2026-07-01', vigencia: '2027-01-01' });
+  assert.deepEqual(estado(f, hoy), ['expired', 'Caducada']);
+  assert.match(descripcionEstado(f, hoy), /continúa de alta.*puede contar en el mensual.*aunque no tenga cita/);
+  assert.deepEqual(estado(familia({ serviciosSociales: false, derivacion: '2026-10-01' }), hoy), ['ok', 'Correcta']);
+  const antigua = familia({ serviciosSociales: false, derivacion: '2026-01-01' });
+  assert.deepEqual(estado(antigua, hoy), ['expired', 'Fuera de recuento']);
+  assert.match(descripcionEstado(antigua, hoy), /más de 90 días/);
+});
+
+test('Fuera de plazo identifica las citas no válidas y explica qué corregir', () => {
+  for (const proximaCita of ['2026-10-13', '2026-02-30', '2027-01-01']) {
+    const f = familia({ vigencia: '2026-10-01', proximaCita });
+    assert.deepEqual(estado(f, hoy), ['expired', 'Fuera de plazo']);
+    assert.match(descripcionEstado(f, hoy), /Corrige la cita/);
   }
 });
 
@@ -48,5 +66,5 @@ test('Mantiene el aviso de 60 días y permite completar datos casilla a casilla'
   const editada = editarPersona(f, 't', 'nombre', 'Ana María', hoy);
   assert.equal(estado(editada, hoy)[0], 'expired');
   const completada = editarPersona(editada, 't', 'proximaCita', '2026-10-15', hoy);
-  assert.equal(estado(completada, hoy)[0], 'ok');
+  assert.deepEqual(estado(completada, hoy), ['expired', 'Caducada']);
 });

@@ -1,21 +1,37 @@
 import "./styles.css";
+import "./interface.css";
 import { loadImportReport, saveImportReport } from "./import-report.js";
 import { erroresFamilia, datosPendientesFamilia } from "./validacion.mjs";
 import { numeroLibre, numeroParaRestaurar } from "./numeracion.mjs";
 import { incorporarAlta } from "./alta-listado.mjs";
 import { editarPersona, eliminarMiembro, restaurarMiembro } from "./edicion-listado.mjs";
+import { HistorialCeldas, mismaEstructura } from './historial-celdas.mjs';
+import { vigenciaAplicada, motivoExclusion } from "./vigencia.mjs";
 import { coincideNumeroFamilia } from "./busqueda.mjs";
-import { loadDB, saveDB, resetDB } from "./database.js";
+import { loadDB, saveDB as guardarListadoDB, resetDB } from "./database.js";
 import { persona, familia, estado } from "./familias.js";
 import { edad, caducada, esc, fmt } from "./utils.js";
-import { exportExcel } from "./excel.js";
+import { exportExcel, exportMonthlyExcel } from "./excel.js";
+import { descripcionEstado } from './estado-familia.mjs';
+import { detalleErrorExcel } from './excel-errors.mjs';
 import { version as appVersion } from "../package.json";
 import { readExcel } from "./excel-import.js";
 import { icon } from "./icons.js";
 import { isTauri } from "@tauri-apps/api/core";
 
 import { prepararReparto, MAX_REPARTO_FILAS, resumen, envases, miembrosContabilizados, familiasParaExportar, tieneDatosBeneficiario } from "./reparto.mjs";
-import { loadReparto, saveReparto, resetReparto } from "./reparto-storage.js";
+import { loadReparto, resetReparto } from "./reparto-storage.js";
+import { crearMensual, mesValido, recuentoValido, resumenMensual, erroresExportacionMensual, nombreMes } from './mensual.mjs';
+import { loadMensuales, saveMensuales, resetMensuales } from './mensual-storage.js';
+import { barraMensual, paginaMensual, totalesMensuales } from './mensual-view.js';
+import { resumenParaEnviar } from './mensual-envio.js';
+import { generarImagenMensual, copiarImagenMensual } from './imagen-mensual.js';
+import { confirmarCopiado } from './copy-feedback.js';
+import { prepararCorreoMensual } from './correo-mensual.js';
+import { marcarAtencionRapida, sincronizarAtenciones, cambiarFechaAtencion, fechaParaAtenciones, registrarAtencion, quitarAtencion, cambiarOrigenRecuento, filasAtenciones } from './atenciones.mjs';
+import { paginaAtenciones, resumenAtenciones, tablaAtenciones } from './atenciones-view.js';
+import { historialIncompleto, incorporarImportacion, iniciarSeguimiento, validarSeguimiento, guardarVersiones, cambiarAlta, familiaEnMes, visibleEnTrimestre, mesesTrimestre, finMes, activarAltas, actualizarAltas, familiasRecuentoTrimestral, resumenTrimestral } from './actividad.mjs';
+import { paginaAltas } from './altas-view.js';
 import companyLogo from "../bancoteide_logo.png?url";
 import { toPng } from "html-to-image";
 import { pngBytes } from "./png.mjs";
@@ -27,12 +43,30 @@ import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 let importandoExcel = false;
 let familiasEliminadas = [], stickyToolsObserver = null;
 let reparto = [], modoListado = "personas", busqueda = "", numeroFamilia = "", filtroEstado = "";
+let mensuales = {}, mensual = crearMensual(todayISO().slice(0, 7));
+let mensualPendiente = false, guardadosMensuales = 0, versionMensual = 0;
+let busquedaAtenciones = '', filtroAtenciones = '', fechaAtenciones = '';
+let marcandoRapido = false;
+let mesListado = todayISO().slice(0, 7), busquedaAltas = '', filtroAltas = '', verArchivadas = false;
+let modoAltas = 'tabla', paginaAltasNumero = 1;
+try { if (localStorage.getItem('gestor-beneficiarios-vista-altas') === 'cuadricula') modoAltas = 'cuadricula'; } catch { /* La preferencia es opcional. */ }
+function familiasEnListado() { return familias.filter(f => visibleEnTrimestre(f, mesListado) || (verArchivadas && (f.seguimiento?.inicio ?? mesListado) <= mesListado)).map(f => familiaEnMes(f, mesListado) ?? f); }
+function resumenDelTrimestre() { return resumenTrimestral(familias, mesListado); }
+function historialListado() { return mesListado !== todayISO().slice(0, 7); }
+let ultimaTrimestral = 'listado';
+let ultimaMensual = 'atenciones';
+const camposMensualesInvalidos = '[data-month-count][aria-invalid="true"], [data-food-amount][aria-invalid="true"], [data-food-name][aria-invalid="true"], [data-month-entity][aria-invalid="true"]';
 let ultimoInforme = null, avisoExcel = "", edicionListado = true;
 const ordenListado = { familias: { columna: "numero", direccion: 1 }, personas: { columna: "numero", direccion: 1 } };
 const comparadorListado = new Intl.Collator("es", { numeric: true, sensitivity: "base" });
 function encabezadosListado(columnas) {
   const orden = ordenListado[modoListado];
-  return '<tr>' + columnas.map(([columna, texto]) => `<th aria-sort="${orden.columna === columna ? (orden.direccion === 1 ? 'ascending' : 'descending') : 'none'}"><button class="column-sort" data-action="sortColumn" data-column="${columna}" title="Ordenar por ${texto}">${texto} <span aria-hidden="true">${orden.columna === columna ? (orden.direccion === 1 ? '↑' : '↓') : '↕'}</span></button></th>`).join('') + '<th class="list-actions-column"><span class="visually-hidden">Acciones</span></th>' + '</tr>';
+  const flecha = columna => orden.columna === columna ? (orden.direccion === 1 ? '↑' : '↓') : '↕';
+  return '<tr>' + columnas.map(([columna, texto]) => {
+    const activa = orden.columna === columna;
+    const clase = columna === 'serviciosSociales' ? 'services-column' : columna === 'numero' ? 'family-number-column' : columna === 'miembros' ? 'family-members-column' : columna === 'alta' ? 'family-active-column' : '';
+    return `<th class="${clase}" aria-sort="${activa ? (orden.direccion === 1 ? 'ascending' : 'descending') : 'none'}"><div class="column-heading"><button type="button" class="column-sort" data-action="sortColumn" data-column="${columna}" aria-pressed="${activa}" title="${activa ? `Orden actual por ${texto}: ${orden.direccion === 1 ? 'ascendente' : 'descendente'}. Pulsa para invertirlo.` : `Ordenar por ${texto}`}">${texto} <span aria-hidden="true">${flecha(columna)}</span></button></div></th>`;
+  }).join('') + '<th class="list-actions-column"><span class="visually-hidden">Acciones</span></th>' + '</tr>';
 }
 function ordenarListado(list, valor) {
   const { columna, direccion } = ordenListado[modoListado];
@@ -43,7 +77,7 @@ function ordenarListado(list, valor) {
     return direccion * (typeof x === 'number' && typeof y === 'number' ? x - y : comparadorListado.compare(String(x), String(y)));
   });
 }
-let familias = [], vista = "listado", editando = null;
+let familias = [], vista = "mensual", editando = null;
 const dateDrafts = new Map();
 let posicionListado = null;
 let familiasCoincidencia = null;
@@ -61,12 +95,12 @@ function aplicarZoomListado(valor) {
 const filtrosRapidos = [['overdue', 'Caducadas'], ['pastAppointment', 'Citas vencidas']];
 function coincideFiltro(f, value) {
   if (value === 'incomplete') return datosPendientesFamilia(f).length > 0;
-  if (value === 'overdue') { const titular = f.personas.find(p => p.titular) ?? f.personas[0]; return caducada(titular?.vigencia); }
+  if (value === 'overdue') { const titular = f.personas.find(p => p.titular) ?? f.personas[0]; return caducada(vigenciaAplicada(titular)); }
   if (value === 'pastAppointment') { const t = f.personas.find(p => p.titular) ?? f.personas[0]; return Boolean(t?.proximaCita && t.proximaCita < todayISO()); }
   return !value || estadoListado(f)[0] === value;
 }
 function cuentaFiltro(value) {
-  return familias.filter(f => coincideFiltro(f, value)).length;
+  return familiasEnListado().filter(f => coincideFiltro(f, value)).length;
 }
 function actualizarFiltrosRapidos() {
   app.querySelectorAll('[data-quick-filter]').forEach(button => {
@@ -131,6 +165,21 @@ function validarFormulario() {
   }
   return false;
 }
+async function saveDB(next) {
+  const cambiaEstructura = !mismaEstructura(familias, next);
+  const preparadas = guardarVersiones(familias, next, todayISO().slice(0, 7));
+  await guardarListadoDB(preparadas);
+  if (cambiaEstructura) historialCeldas.limpiar();
+  next.splice(0, next.length, ...preparadas);
+  familias = next;
+  for (const [mes, dato] of Object.entries(mensuales)) {
+    if (dato.recuentoDesdeAltas) mensuales[mes] = actualizarAltas(dato, next);
+  }
+  if (mensual.recuentoDesdeAltas) {
+    mensual = actualizarAltas(mensual, next);
+    await guardarMensual();
+  } else if (Object.values(mensuales).some(m => m.recuentoDesdeAltas)) await saveMensuales(mensuales);
+}
 async function changed() {
   const error = errorFormulario();
   if (error) {
@@ -152,14 +201,27 @@ async function changed() {
   }
 }
 function navegacion() {
-  return `<nav class="app-sections" aria-label="Secciones">${[['listado', 'Listado'], ['reparto', 'Reparto'], ['resumen', 'Resumen'], ['importar', 'Cargar Excel']].map(([id, texto]) => `<button data-action="section" data-view="${id}" class="${vista === id ? 'primary' : 'secondary'}" aria-current="${vista === id ? 'page' : 'false'}">${texto}</button>`).join('')}</nav>`;
+  const esMensual = ['mensual', 'atenciones', 'reparto'].includes(vista);
+  const boton = (id, texto, activo, descripcion = '') => `<button data-action="section" data-view="${id}" class="${activo ? 'primary' : 'secondary'}" aria-current="${activo ? 'page' : 'false'}" ${descripcion ? `title="${descripcion}"` : ''}>${texto}</button>`;
+  const subpaginas = esMensual ? [['atenciones', 'Familias de alta'], ['mensual', 'Resumen mensual'], ['reparto', 'Reparto']] : [['listado', 'Listado'], ['resumen', 'Resumen del listado'], ['importar', 'Cargar Excel']];
+  const periodo = esMensual ? barraMensual(mensual, mensuales) : ['listado', 'resumen'].includes(vista)
+    ? `<div class="quarter-period"><label>Mes de referencia<input type="month" data-list-month value="${mesListado}" min="1900-01" max="9999-12"></label><span>${etiquetaTrimestre()}</span></div>` : '';
+  return `<div class="navigation-top"><nav class="app-sections section-groups" aria-label="Periodos">${boton(ultimaMensual, 'Mensual', esMensual, 'Prever alimentos: familias de alta al cierre del mes, resumen y reparto')}${boton(ultimaTrimestral, 'Trimestral', !esMensual, 'Mantener las familias, sus altas y bajas y el listado del trimestre')}</nav>${periodo}</div><div class="navigation-bottom"><nav class="section-pages" aria-label="${esMensual ? 'Mensual' : 'Trimestral'}">${subpaginas.map(([id, texto]) => boton(id, texto, vista === id)).join('')}</nav><details class="workflow-help"><summary>Cómo trabajar</summary><div class="help-panel"><h3>Del listado al envío</h3><ol><li><strong>Registra y actualiza las familias</strong> en Trimestral → Listado, o carga un Excel. Los cambios de las casillas se guardan al salir.</li><li><strong>Revisa el cierre del mes</strong> en Mensual → Familias de alta. Verás qué familias entran en el recuento y el motivo de las exclusiones.</li><li><strong>Genera el Excel mensual</strong> desde Resumen mensual. Incluye el resumen y el reparto de alimentos de ese mes.</li></ol><p>El Excel trimestral se genera desde Listado y contiene Listado y Resumen. Conserva las familias que participaron durante el trimestre, aunque después se den de baja.</p><p class="help-storage">Los datos se guardan automáticamente en ${isTauri() ? 'este ordenador' : 'este navegador'}. Conserva también los Excel que generes.</p></div></details></div>`;
+}
+function etiquetaTrimestre() {
+  const meses = mesesTrimestre(mesListado);
+  const primero = nombreMes(meses[0]).split(' de ')[0];
+  return `${primero} – ${nombreMes(meses[2])}`;
 }
 function render() {
+  listNotice('');
   document.getElementById("app").dataset.view = vista;
   document.getElementById("sectionNavigation").innerHTML = navegacion();
   if (vista === 'formulario') renderFormulario();
   else if (vista === 'resumen') renderResumen();
   else if (vista === 'reparto') renderReparto();
+  else if (vista === 'atenciones') renderAltas();
+  else if (vista === 'mensual') app.innerHTML = paginaMensual(mensual, mensuales);
   else if (vista === 'importar') renderImportar();
   else renderListado();
   renderExcelNotice();
@@ -170,7 +232,125 @@ function todayISO() {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
-function getPendingActions(familiasRevisar = familias) {
+function validarCamposMensuales() {
+  const invalido = app.querySelector(camposMensualesInvalidos);
+  if (!invalido) return true;
+  invalido.focus();
+  invalido.reportValidity();
+  return false;
+}
+async function guardarMensual() {
+  mensual.reparto = reparto;
+  mensuales[mensual.mes] = mensual;
+  mensualPendiente = true;
+  const version = ++versionMensual;
+  guardadosMensuales++;
+  setSaveState('Guardando el recuento, resumen y reparto de este mes…', 'saving');
+  try {
+    await saveMensuales(mensuales);
+    if (version === versionMensual) {
+      mensualPendiente = false;
+      if (app.querySelector(camposMensualesInvalidos)) setSaveState('Hay casillas pendientes de corregir en este mes.', 'pending');
+      else setSaveState('Recuento, resumen y reparto mensual guardados.');
+      actualizarHistorialMensual();
+    }
+  } catch (error) {
+    setSaveState('No se pudieron guardar los últimos cambios del mensual.', 'error');
+    throw error;
+  } finally { guardadosMensuales--; }
+}
+function actualizarHistorialMensual() {
+  const select = document.querySelector('[data-month-history]');
+  if (!select) return;
+  select.innerHTML = '<option value="">Seleccionar mes…</option>' + Object.keys(mensuales).sort().reverse()
+    .map(mes => `<option value="${mes}" ${mes === mensual.mes ? 'selected' : ''}>${esc(nombreMes(mes))}</option>`).join('');
+}
+async function cambiarMes(mes) {
+  if (!mesValido(mes) || !validarCamposMensuales()) return false;
+  if (mensualPendiente) await guardarMensual();
+  if (mes === mensual.mes) return true;
+  paginaAltasNumero = 1;
+  const nuevo = crearMensual(mes, mensual.entidad, reparto);
+  mensual = mensuales[mes] ?? activarAltas(nuevo, familias);
+  if (mensual.recuentoDesdeAltas) mensual = actualizarAltas(mensual, familias);
+  reparto = mensual.reparto;
+  avisoExcel = '';
+  render();
+  return true;
+}
+function actualizarTotalesMensuales() {
+  app.querySelectorAll('[data-month-totals]').forEach(totals => {
+    totals.innerHTML = totalesMensuales(mensual, totals.dataset.monthTotals);
+  });
+}
+function renderAltas() {
+  app.innerHTML = paginaAltas(mensual, familias, busquedaAltas, filtroAltas, { modo: modoAltas, pagina: paginaAltasNumero });
+  paginaAltasNumero = Number(app.querySelector('[data-active-page-current]').dataset.activePageCurrent);
+}
+function cambiarPaginaAltas(pagina) {
+  if (!Number.isSafeInteger(pagina) || pagina < 1) return;
+  paginaAltasNumero = pagina;
+  renderAltas();
+  app.querySelector('[data-active-page]')?.focus({ preventScroll: true });
+}
+function renderAtenciones() {
+  if (fechaAtenciones.slice(0, 7) !== mensual.mes) fechaAtenciones = fechaParaAtenciones(mensual.mes, todayISO());
+  app.innerHTML = paginaAtenciones(mensual, mensuales, familias, {
+    consulta: busquedaAtenciones, filtro: filtroAtenciones, fecha: fechaAtenciones,
+  });
+}
+async function cambiarSituacionDesdeAltas(target) {
+  const id = target.dataset.id, mes = mensual.mes;
+  const alta = target.dataset.nextActive === 'true';
+  const actual = familias.find(f => f.id === id);
+  const version = actual && familiaEnMes(actual, mes);
+  if (!version || version.deAlta === alta) return;
+  const operacion = alta ? 'alta' : 'baja';
+  const table = app.querySelector('.attendance-table-wrap');
+  const posicion = { top: table?.scrollTop ?? 0, left: table?.scrollLeft ?? 0 };
+  const devolverFoco = document.activeElement === target;
+  guardandoAlta = true;
+  target.disabled = true;
+  try {
+    if (vista !== 'atenciones' || mensual.mes !== mes) return;
+    const next = familias.map(f => f.id === id ? cambiarAlta(f, mes, alta) : f);
+    setSaveState(`Guardando la ${operacion} de la familia ${version.numero}…`, 'saving');
+    await saveDB(next);
+    setSaveState(`Familia ${version.numero} de ${operacion} desde ${nombreMes(mes)}.`, 'saved');
+    avisoExcel = `Familia ${version.numero} dada de ${operacion} desde ${nombreMes(mes)}. ${mensual.recuentoDesdeAltas ? 'Recuento mensual actualizado.' : 'Se conservan las cifras de este mes con su criterio anterior.'}`;
+    render();
+    const nuevaTabla = app.querySelector('.attendance-table-wrap');
+    if (nuevaTabla) {
+      nuevaTabla.scrollTop = posicion.top;
+      nuevaTabla.scrollLeft = posicion.left;
+      if (devolverFoco) {
+        const boton = app.querySelector(`[data-active-row="${CSS.escape(id)}"] [data-action="changeActiveFamily"]`);
+        (boton ?? nuevaTabla).focus({ preventScroll: true });
+      }
+    }
+  } finally {
+    target.disabled = false;
+    guardandoAlta = false;
+  }
+}
+function actualizarAtenciones() {
+  const tbody = app.querySelector('[data-attendance-rows]');
+  if (!tbody) return;
+  const active = document.activeElement;
+  const checkbox = tbody.contains(active) ? active.dataset.attendanceFamily : null;
+  const anteriores = [...tbody.querySelectorAll('[data-attendance-family]')];
+  const indice = anteriores.indexOf(active);
+  const table = tbody.closest('.table-wrap'), top = table.scrollTop, left = table.scrollLeft;
+  tbody.innerHTML = tablaAtenciones(mensual, familias, busquedaAtenciones, filtroAtenciones);
+  app.querySelector('.attendance-summary').innerHTML = resumenAtenciones(mensual);
+  if (checkbox) {
+    const siguiente = tbody.querySelector(`[data-attendance-family="${checkbox}"]`)
+      ?? [...tbody.querySelectorAll('[data-attendance-family]')][Math.min(indice, tbody.querySelectorAll('[data-attendance-family]').length - 1)];
+    siguiente?.focus({ preventScroll: true });
+  }
+  table.scrollTop = top; table.scrollLeft = left;
+}
+function getPendingActions(familiasRevisar = familiasEnListado()) {
   const today = todayISO();
   const actions = [];
   for (const family of familiasRevisar) {
@@ -180,7 +360,9 @@ function getPendingActions(familiasRevisar = familias) {
       const etiqueta = pendiente.persona.titular ? 'Titular' : `${pendiente.persona.nombre || 'Miembro'} ${pendiente.persona.apellidos || ''}`.trim();
       actions.push({ tipo: 'datos', family, name, personId: pendiente.persona.id, campo: pendiente.campos[0], message: `${etiqueta}: completar o revisar ${pendiente.campos.map(campo => listLabels[campo]).join(', ')}.` });
     }
-    const vencida = caducada(titular?.vigencia);
+    const vencida = caducada(vigenciaAplicada(titular));
+    const exclusion = motivoExclusion(family);
+    if (exclusion) actions.push({ tipo: 'vigencia', family, name, message: exclusion });
     const citaPasada = titular?.proximaCita && titular.proximaCita < today ? titular.proximaCita : '';
     if (vencida && !titular?.proximaCita) {
       actions.push({ tipo: 'cita', family, name, message: 'Vigencia caducada: anota la próxima cita cuando esté concertada.' });
@@ -197,7 +379,7 @@ function renderPendingActions() {
   if (!details) return;
   const actions = getPendingActions();
   const summary = details.querySelector('summary');
-  summary.innerHTML = `Ver detalles <span class="pending-count">${actions.length}</span>`;
+  summary.innerHTML = `Tareas <span class="pending-count">${actions.length}</span>`;
   const list = details.querySelector('[data-pending-list]');
   const familiasId = [...new Set(actions.map(item => item.family.id))];
   const botonVer = familiasId.length ? `<button type="button" class="primary pending-show-families" data-pending-families="${esc(familiasId.join(','))}">Familias pendientes (${familiasId.length})</button>` : '';
@@ -220,7 +402,7 @@ function renderPendingActions() {
     botonExistente.dataset.pendingFamilies = familiasId.join(',');
     botonExistente.textContent = `Familias pendientes (${familiasId.length})`;
   } else {
-    overview.innerHTML = botonVer || '<button type="button" class="pending-clear" disabled>Sin tareas pendientes</button>';
+    overview.innerHTML = botonVer || '<span class="pending-clear"><span class="pending-clear-check" aria-hidden="true">✓</span>Sin tareas pendientes</span>';
   }
   list.innerHTML = grupos || '<p>No hay acciones pendientes.</p>';
 }
@@ -245,7 +427,7 @@ function avisarExportacionBloqueada(familiasRevisar = familias) {
 function normalizeDuplicateKey(value) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es").replace(/[^\p{L}\p{N}]/gu, "");
 }
-function findDuplicateGroups() {
+function findDuplicateGroups(fuente = familiasEnListado()) {
   const borradores = new Map();
   for (const input of listDrafts.values()) {
     if (!['nombre', 'apellidos', 'documento'].includes(input.dataset.listField)) continue;
@@ -253,7 +435,7 @@ function findDuplicateGroups() {
     datos[input.dataset.listField] = input.value.trim();
     borradores.set(input.dataset.personId, datos);
   }
-  const people = familias.flatMap(family => family.personas.map((guardada, index) => {
+  const people = fuente.flatMap(family => family.personas.map((guardada, index) => {
     const person = { ...guardada, ...borradores.get(guardada.id) };
     return {
     family,
@@ -333,10 +515,10 @@ function updatePageNav() {
   down.hidden = maxY < 80 || window.scrollY > maxY - 80;
 }
 function renderResumen() {
-  const r = resumen(familias);
-  app.innerHTML = `<div id="summaryImage" class="summary-image"><div class="summary-heading"><div><h2>Resumen de beneficiarios</h2><p class="summary-date">Generado el ${fmt(todayISO())}</p></div><button class="primary summary-download" data-action="exportSummary">${icon("download")} Descargar imagen</button></div><div class="card"><div class="summary"><div class="stat"><strong>${r.familias}</strong>Familias</div><div class="stat"><strong>${r.personas}</strong>Beneficiarios</div></div></div>
+  const r = resumenDelTrimestre();
+  app.innerHTML = `<div id="summaryImage" class="summary-image"><div class="summary-heading"><div><p class="section-eyebrow">Trimestral</p><h2>Resumen del listado</h2><p class="summary-date">${etiquetaTrimestre()} · Familias que participaron durante el trimestre.</p></div><button class="primary summary-download" data-action="exportSummary">${icon("download")} Descargar imagen</button></div><div class="card"><div class="summary"><div class="stat"><strong>${r.familias}</strong>Familias</div><div class="stat"><strong>${r.personas}</strong>Beneficiarios</div></div></div>
   <div class="report-grid"><div class="card"><h2>Familias por número de miembros</h2><table><thead><tr><th>Miembros</th><th>Familias</th></tr></thead><tbody>${r.tamanos.map((n, i) => `<tr><td>${i + 1}</td><td>${n}</td></tr>`).join('')}${r.fuera ? `<tr><td>Más de 10</td><td>${r.fuera}</td></tr>` : ''}</tbody></table></div>
-  <div class="card"><h2>Personas por rango de edad</h2><table><thead><tr><th>Rango de la plantilla</th><th>Personas</th></tr></thead><tbody>${['0–2 años', '3–18 años', '19–100 años'].map((label, i) => `<tr><td>${label}</td><td>${r.edades[i]}</td></tr>`).join('')}<tr><td>Menores sin fecha de nacimiento</td><td>${r.menoresSinNacimiento}</td></tr><tr><td>Otras personas sin fecha o fuera de los rangos</td><td>${r.sinRango - r.menoresSinNacimiento}</td></tr></tbody></table><p>Los menores sin fecha de nacimiento cuentan en el total de beneficiarios, pero no se asignan a ningún rango de edad.</p><p>Se utilizan los límites de fechas de la plantilla: desde hace 3 años hasta antes de hoy; desde hace 18 hasta antes de hace 3 años; y desde hace 100 hasta antes de hace 18 años. Estos límites no coinciden exactamente con las etiquetas de edad.</p></div></div></div>`;
+  <div class="card"><h2>Personas por rango de edad</h2><table><thead><tr><th>Rango de la plantilla</th><th>Personas</th></tr></thead><tbody>${['0–2 años', '3–18 años', '19–100 años'].map((label, i) => `<tr><td>${label}</td><td>${r.edades[i]}</td></tr>`).join('')}<tr><td>Menores sin fecha de nacimiento</td><td>${r.menoresSinNacimiento}</td></tr><tr><td>Otras personas sin fecha o fuera de los rangos</td><td>${r.sinRango - r.menoresSinNacimiento}</td></tr></tbody></table><p class="report-note">Se agrupa por años cumplidos, con ambos extremos incluidos. Las personas sin nacimiento cuentan en el total, pero quedan fuera de los rangos de edad.</p></div></div></div>`;
 }
 
 async function exportSummary() {
@@ -367,18 +549,77 @@ async function exportSummary() {
     button.disabled = false;
   }
 }
+function resumenMensualParaCompartir() {
+  try { return resumenParaEnviar(structuredClone(mensual)); }
+  catch (error) {
+    avisoExcel = `Revisa los datos antes de compartir el resumen mensual. ${error.message}`;
+    render();
+    app.querySelector(!mensual.entidad.trim() ? '[data-month-entity]' : '[data-month-count]')?.focus();
+    return null;
+  }
+}
+async function exportMonthlyImage(target) {
+  const resumen = resumenMensualParaCompartir();
+  if (!resumen) return;
+  const original = target.innerHTML;
+  target.disabled = true;
+  target.textContent = 'Creando imagen…';
+  try {
+    const { dataUrl, bytes } = await generarImagenMensual(resumen, companyLogo);
+    if (isTauri()) {
+      const path = await save({ title: 'Guardar imagen del resumen mensual', defaultPath: resumen.archivo, filters: [{ name: 'Imagen PNG', extensions: ['png'] }] });
+      if (!path) return;
+      await writeFile(path, bytes);
+      avisoExcel = `Imagen del resumen mensual guardada en ${path}. Ya puedes adjuntarla a un correo.`;
+    } else {
+      const link = document.createElement('a');
+      link.download = resumen.archivo;
+      link.href = dataUrl;
+      link.click();
+      avisoExcel = 'Imagen del resumen mensual generada. Se ha solicitado su descarga al navegador.';
+    }
+    renderExcelNotice();
+  } catch (error) {
+    avisoExcel = `No se pudo crear la imagen del resumen mensual. ${error.message}`;
+    renderExcelNotice();
+  } finally {
+    target.disabled = false;
+    target.innerHTML = original;
+  }
+}
+async function copyMonthlyImage(target) {
+  const resumen = resumenMensualParaCompartir();
+  if (!resumen) return;
+  const original = target.innerHTML;
+  let copiado = false;
+  target.disabled = true;
+  target.textContent = 'Copiando imagen…';
+  try {
+    await copiarImagenMensual(resumen, companyLogo);
+    copiado = true;
+    confirmarCopiado(target, original);
+    avisoExcel = 'Imagen copiada. Abre tu correo en el navegador, pulsa dentro del mensaje y pega con Ctrl+V (⌘V en Mac).';
+  } catch (error) {
+    avisoExcel = error.name === 'NotAllowedError'
+      ? 'No se pudo copiar la imagen. Permite el acceso al portapapeles e inténtalo de nuevo, o utiliza «Descargar imagen».'
+      : `No se pudo copiar la imagen. ${error.message}`;
+  } finally {
+    if (!copiado) {
+      target.disabled = false;
+      target.innerHTML = original;
+    }
+  }
+  renderExcelNotice();
+}
 function renderReparto() {
-  const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
-  const tamanosActivos = r.tamanos.flatMap((cantidad, i) => cantidad ? [i + 1] : []);
+  const r = { ...resumenMensual(mensual), tamanos: mensual.tamanos }, total = r.puedeRepartir ? r.personas : 0;
+  const tamanosActivos = r.tamanos.flatMap((cantidad, i) => Number(cantidad) ? [i + 1] : []);
   const anchoColumnaFamilia = tamanosActivos.length ? (62 / tamanosActivos.length).toFixed(3) : "0";
-  app.innerHTML = `<section class="card reparto-page">
-    <div class="reparto-heading"><div><div class="reparto-print-brand"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"></div><h2>Reparto de alimentos</h2><p class="reparto-intro">Introduce la cantidad asignada de cada alimento en envases. La tabla calcula los envases por familia según su número de miembros, como en Excel.</p></div><div class="reparto-actions"><button class="secondary" data-action="printReparto">Imprimir reparto</button></div></div>
-    <div class="reparto-summary"><span><strong>${r.tamanos.reduce((a, b) => a + b, 0)}</strong> familias</span><span><strong>${total}</strong> beneficiarios para el reparto</span></div>
-    ${r.fuera ? `<div class="notice reparto-screen-note">${r.fuera} familias de más de 10 miembros quedan fuera del cálculo de Reparto, igual que en la plantilla.</div>` : ''}${!total ? '<p class="notice reparto-screen-note">Añade familias de 1 a 10 miembros para calcular el reparto.</p>' : ''}
-    <div class="table-wrap"><table class="reparto-table"><thead><tr><th>Alimento</th><th>Cantidad asignada</th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${size} miembros</th>`).join('')}<th class="reparto-row-action-heading">Acciones</th></tr><tr><th>Familias</th><th></th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1]}</th>`).join('')}<th></th></tr><tr><th>Beneficiarios</th><th></th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1] * size}</th>`).join('')}<th></th></tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${tamanosActivos.map(size => `<td class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%" data-result="${i}:${size - 1}">${envases(a.cantidad, size, r.tamanos[size - 1], total) ?? '—'}</td>`).join('')}<td class="reparto-row-action"><button type="button" class="danger" data-action="removeRepartoRow" data-index="${i}" aria-label="Quitar ${esc(a.nombre || `fila ${i + 1}`)}" title="Quitar fila">${icon("trash")}</button></td></tr>`).join('')}</tbody></table></div>
-    <div class="reparto-row-actions"><button class="secondary" data-action="addRepartoRow" ${reparto.length >= MAX_REPARTO_FILAS ? "disabled" : ""}>${icon("add")} Añadir fila</button><span>${reparto.length} de ${MAX_REPARTO_FILAS} filas · el Excel admite hasta ${MAX_REPARTO_FILAS}</span></div>
-    <p class="reparto-explanation">Se divide cada cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</p>
-  </section>`;
+  app.innerHTML = `<div class="reparto-workspace" style="--reparto-width:${Math.max(390, 350 + tamanosActivos.length * 84)}px;--reparto-columns:${tamanosActivos.length}">
+    <div class="reparto-heading"><div><div class="reparto-print-brand"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"></div><p class="section-eyebrow">Mensual · ${esc(nombreMes(mensual.mes))}${mensual.entidad ? ` · ${esc(mensual.entidad)}` : ''}</p><h2>Reparto de alimentos</h2><p class="reparto-screen-description">Introduce las cantidades disponibles para calcular cuánto corresponde a cada familia.</p></div></div>
+    <section class="card reparto-page ${r.coincide && r.personas === 0 ? 'reparto-empty' : ''}"><div class="reparto-toolbar"><div class="reparto-summary" aria-label="Totales del mes"><div><strong>${r.familias}</strong><span>Familias</span></div><div><strong>${r.personas}</strong><span>Beneficiarios</span></div></div>${r.puedeRepartir ? '<div class="reparto-actions"><div class="reparto-help"><button type="button" class="reparto-help-button" aria-label="Cómo se calcula el reparto" aria-describedby="repartoCalculation">i</button><span id="repartoCalculation" class="reparto-help-text" role="tooltip">Se divide cada cantidad entre los beneficiarios de esta tabla, se multiplica por los miembros de la familia y se redondea al entero más próximo. El redondeo puede producir un total distinto de la cantidad asignada.</span></div><button class="secondary" data-action="printReparto">Imprimir reparto</button></div>' : ''}</div>
+    ${!r.puedeRepartir ? `<div class="notice reparto-screen-note"><p>${r.coincide ? (r.personas ? 'Revisa las edades y los tamaños de las familias del resumen antes de calcular el reparto.' : 'No hay familias en el resumen mensual para repartir.') : 'Los beneficiarios por familias y por edades deben coincidir para calcular el reparto.'}</p><button class="secondary" data-action="section" data-view="mensual">${r.personas || !r.coincide ? 'Revisar resumen mensual' : 'Ir al resumen mensual'}</button></div>` : `<div class="table-wrap"><table class="reparto-table"><colgroup><col class="reparto-food-col"><col class="reparto-amount-col">${tamanosActivos.map(() => '<col class="reparto-family-col">').join('')}<col class="reparto-action-col"></colgroup><thead><tr class="reparto-families-row"><th scope="row" colspan="2" class="reparto-count-label">Familias</th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1]}</th>`).join('')}<th></th></tr><tr class="reparto-beneficiaries-row"><th scope="row" colspan="2" class="reparto-count-label">Beneficiarios</th>${tamanosActivos.map(size => `<th class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${r.tamanos[size - 1] * size}</th>`).join('')}<th></th></tr><tr><th scope="col">Alimento</th><th scope="col">Cantidad</th>${tamanosActivos.map(size => `<th scope="col" class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%">${size} ${size === 1 ? 'miembro' : 'miembros'}</th>`).join('')}<th scope="col" class="reparto-row-action-heading"><span class="visually-hidden">Quitar alimento</span></th></tr></thead><tbody>${reparto.map((a, i) => `<tr><td><input aria-label="Nombre del alimento ${i + 1}" maxlength="100" data-food-name="${i}" value="${esc(a.nombre)}"></td><td><input aria-label="Cantidad de ${esc(a.nombre)}" type="number" min="0" step="any" data-food-amount="${i}" value="${a.cantidad}"></td>${tamanosActivos.map(size => `<td class="reparto-size-column" style="--print-width:${anchoColumnaFamilia}%" data-result="${i}:${size - 1}">${envases(a.cantidad, size, r.tamanos[size - 1], total) ?? '—'}</td>`).join('')}<td class="reparto-row-action"><button type="button" class="danger" data-action="removeRepartoRow" data-index="${i}" aria-label="Quitar ${esc(a.nombre || `fila ${i + 1}`)}" title="Quitar fila">${icon("trash")}</button></td></tr>`).join('')}</tbody></table></div><div class="reparto-row-actions"><button class="secondary" data-action="addRepartoRow" ${reparto.length >= MAX_REPARTO_FILAS ? "disabled" : ""}>${icon("add")} Añadir alimento</button><span>${reparto.length} / ${MAX_REPARTO_FILAS} alimentos</span></div>`}
+  </section></div>`;
 }
 
 function displayDate(value) {
@@ -399,7 +640,11 @@ function dateField(person, index, field, label, note = "") {
   return `<div class="date-field"><label for="date-text-${person.id}-${field}">${label}</label><div class="date-entry"><input id="date-text-${person.id}-${field}" type="text" inputmode="numeric" autocomplete="off" placeholder="dd/mm/aaaa" aria-label="${label}, formato día/mes/año" value="${esc(current)}" data-date-text data-field="${field}" data-index="${index}" data-person-id="${esc(person.id)}"><button class="date-picker-button" type="button" title="Abrir calendario" aria-label="Abrir calendario para ${label}" data-action="datePicker" data-picker-id="${esc(pickerId)}">${icon("calendar")}</button><input class="date-picker-native" id="${esc(pickerId)}" type="date" min="1900-01-01" max="9999-12-31" value="${esc(person[field])}" data-date-picker data-field="${field}" data-index="${index}" data-person-id="${esc(person.id)}" tabindex="-1" aria-hidden="true"></div>${note}</div>`;
 }
 function sharedDateField(person, field, label) {
-  return `<div class="date-field"><label>${label}</label><input type="text" value="${esc(displayDate(person[field]))}" readonly aria-label="${label}, compartida con la persona titular"><small>Fecha compartida con el titular.</small></div>`;
+  const value = field === 'vigencia' ? vigenciaAplicada(person) : person[field];
+  return `<div class="date-field"><label>${label}</label><input type="text" value="${esc(displayDate(value))}" readonly ${field === 'vigencia' ? 'data-auto-validity' : ''} aria-label="${label}, compartida con la persona titular"><small>Fecha compartida con el titular.</small></div>`;
+}
+function automaticValidityField(person) {
+  return `<div class="date-field"><label>Vigencia</label><input type="text" data-auto-validity value="${esc(displayDate(vigenciaAplicada(person)))}" readonly aria-label="Vigencia aplicada"></div>`;
 }
 function normalizeTitulares(familias) {
   let wasChanged = false;
@@ -413,13 +658,28 @@ function normalizeTitulares(familias) {
     });
     const titular = family.personas[chosen];
     for (const person of family.personas) {
-      for (const field of ["derivacion", "vigencia"]) {
-        if (person[field] !== titular[field]) wasChanged = true;
-        person[field] = titular[field] ?? "";
+      for (const field of ["derivacion", "vigencia", "serviciosSociales"]) {
+        const value = field === 'serviciosSociales'
+          ? (titular.serviciosSocialesConfigurado !== true || titular[field] !== false)
+          : titular[field] ?? '';
+        if (person[field] !== value) wasChanged = true;
+        person[field] = value;
+        if (field === 'serviciosSociales' && person.serviciosSocialesConfigurado !== true) wasChanged = true;
+        if (field === 'serviciosSociales') person.serviciosSocialesConfigurado = true;
       }
     }
   }
   return wasChanged;
+}
+function zonaAvisos() {
+  let zona = document.getElementById('appNotifications');
+  if (!zona) {
+    zona = document.createElement('aside');
+    zona.id = 'appNotifications';
+    zona.setAttribute('aria-label', 'Notificaciones');
+    document.body.append(zona);
+  }
+  return zona;
 }
 function renderExcelNotice() {
   let notice = document.getElementById('excelNotice');
@@ -428,18 +688,31 @@ function renderExcelNotice() {
     notice.id = 'excelNotice';
     notice.className = 'notice excel-notice';
     notice.setAttribute('role', 'status');
-    app.prepend(notice);
+    zonaAvisos().append(notice);
   }
-  notice.classList.toggle('excel-notice-blocked', avisoExcel.startsWith('No se puede generar el Excel'));
+  const requiereRevision = /^(No |Revisa )/.test(avisoExcel);
+  notice.classList.toggle('excel-notice-blocked', requiereRevision);
+  notice.classList.toggle('excel-notice-error', requiereRevision);
   notice.hidden = !avisoExcel;
-  notice.textContent = avisoExcel;
+  const message = document.createElement('span');
+  message.textContent = avisoExcel;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'notice-dismiss';
+  close.setAttribute('aria-label', 'Cerrar aviso');
+  close.textContent = '×';
+  close.addEventListener('click', () => {
+    avisoExcel = '';
+    renderExcelNotice();
+  });
+  notice.replaceChildren(message, close);
 }
 function informeImportacion() {
   if (!ultimoInforme) return '';
   return `<section class="card import-report" aria-label="Resultado de la última importación"><h2>Última importación de Excel</h2><p><strong>${esc(ultimoInforme.archivo)}</strong> · ${esc(new Date(ultimoInforme.fecha).toLocaleString('es-ES'))}</p><p>${ultimoInforme.familias} familias y ${ultimoInforme.personas} beneficiarios cargados. <strong>${ultimoInforme.issues.length} filas omitidas.</strong></p>${ultimoInforme.issues.length ? `<details open><summary>Filas omitidas y motivos</summary><p>Revisa estas filas en el Excel original para corregirlas o añadir sus beneficiarios manualmente.</p><div class="table-wrap"><table><thead><tr><th>Fila del Excel</th><th>Familia</th><th>Persona</th><th>Motivo</th></tr></thead><tbody>${ultimoInforme.issues.map(issue => `<tr><td>${esc(issue.row)}</td><td>${esc(issue.familia || '—')}</td><td>${esc([issue.nombre, issue.apellidos].filter(Boolean).join(' ') || 'Sin nombre en el archivo')}</td><td>${esc(issue.reason)}</td></tr>`).join('')}</tbody></table></div></details>` : '<p>Se cargaron todos los registros válidos encontrados.</p>'}${ultimoInforme.warnings?.length ? `<details><summary>Datos informativos importados con ajustes (${ultimoInforme.warnings.length})</summary><ul>${ultimoInforme.warnings.map(item => `<li>Fila ${esc(item.row)}, familia ${esc(item.familia)}: ${esc(item.reason)}</li>`).join('')}</ul></details>` : ''}${ultimoInforme.sinPersistir ? '<p class="notice">Este informe no pudo guardarse para la próxima apertura. Consérvalo antes de cerrar la aplicación.</p>' : ''}</section>`;
 }
 const listDrafts = new Map();
-const fechasBorradas = new Map();
+const historialCeldas = new HistorialCeldas();
 let listSaving = Promise.resolve(), guardandoAlta = false;
 const listLabels = { nombre: 'Nombre', apellidos: 'Apellidos', documento: 'Documento', nacimiento: 'Nacimiento', derivacion: 'Derivación', vigencia: 'Vigencia', proximaCita: 'Próxima cita' };
 const listDates = new Set(['nacimiento', 'derivacion', 'vigencia', 'proximaCita']);
@@ -475,6 +748,7 @@ function actualizarAvisoCampo(input) {
   }
 }
 function validarFechaLista(input, avisar = true) {
+  if (input.readOnly) return true;
   if (!listDates.has(input.dataset.listField)) return true;
   const valor = input.value.trim();
   let mensajeError = '';
@@ -517,28 +791,52 @@ function diasVigencia(fecha) {
   const clase = dias < 0 ? 'expired' : dias <= 60 ? 'warn' : 'ok';
   return `<span class="validity-days ${clase}" title="${titulo}" aria-label="${titulo}">${texto}</span>`;
 }
+function celdaOrigen(f, p) {
+  if (!p.titular) return '<td class="shared-date-empty" aria-hidden="true"></td>';
+  return `<td class="services-origin-cell"><label class="list-minor-toggle"><input type="checkbox" data-list-origin data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" ${p.serviciosSociales === false ? 'checked' : ''} aria-label="No procede de Servicios Sociales, familia ${f.numero}" title="Marca si no procede de Servicios Sociales">No</label></td>`;
+}
+function campoConBorrado(input, valor, etiqueta) {
+  return `<span class="clearable-field">${input}<button type="button" class="field-clear" data-clear-field aria-label="Limpiar ${esc(etiqueta)}" title="Limpiar campo" ${valor ? '' : 'hidden'}>×</button></span>`;
+}
+
 function listCell(f, p, campo, pendientes = []) {
   if (!p.titular && ['derivacion', 'vigencia', 'proximaCita'].includes(campo)) {
     return '<td class="shared-date-empty" aria-hidden="true"></td>';
   }
-  const valor = listDates.has(campo) ? displayDate(p[campo]) : p[campo] ?? '';
+  const fechaVigencia = vigenciaAplicada(p);
+  const dato = campo === 'vigencia' ? fechaVigencia : p[campo];
+  const valor = listDates.has(campo) ? displayDate(dato) : dato ?? '';
   const pendiente = pendientes.includes(campo)
-    || (p.titular && campo === 'vigencia' && !String(p.vigencia ?? '').trim())
-    || (p.titular && campo === 'proximaCita' && ((!p.proximaCita && caducada(p.vigencia)) || (p.proximaCita && p.proximaCita < todayISO())))
+    || (p.titular && campo === 'vigencia' && !String(fechaVigencia).trim())
+    || (p.titular && campo === 'proximaCita' && ((!p.proximaCita && caducada(fechaVigencia)) || (p.proximaCita && p.proximaCita < todayISO())))
     || (campo === 'documento' && !p.titular && !p.menor && !String(p.documento ?? '').trim());
   const mensaje = erroresFamilia(f).find(error => f.personas[error.indice]?.id === p.id && error.campo === campo)?.mensaje || '';
   const aviso = mensaje || (pendiente ? 'Dato pendiente de completar' : '');
-  return `<td ${aviso ? `title="${esc(aviso)}"` : ''} class="editable-cell ${campo === 'vigencia' ? `cell-validity ${p[campo] && !caducada(p[campo]) ? 'cell-current' : ''}` : ''} ${pendiente ? 'cell-missing' : ''} ${campo === 'vigencia' && caducada(p[campo]) ? 'cell-expired' : campo === 'proximaCita' && p[campo] && p[campo] < todayISO() ? 'cell-expired' : ''}"><span class="cell-print">${esc(valor || (campo === 'nombre' && p.menor ? 'MENOR' : '—'))}</span><input type="text" value="${esc(valor)}" data-list-field="${campo}" data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="${listLabels[campo]}, familia ${f.numero}, ${esc(p.nombre || 'persona')}${p.titular ? ', titular' : ''}${pendiente ? ', dato pendiente' : ''}" ${aviso ? `title="${esc(aviso)}"` : ''} ${campo === 'nombre' && p.menor ? 'placeholder="MENOR"' : ''} ${listDates.has(campo) ? 'placeholder="dd/mm/aaaa" inputmode="numeric"' : ''}>${campo === 'vigencia' ? diasVigencia(p.vigencia) : ''}${campo === 'nacimiento' && !p.titular ? `<label class="list-minor-toggle"><input type="checkbox" data-list-minor data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" ${p.menor ? 'checked' : ''} aria-label="Menor de edad, familia ${f.numero}">Menor</label>` : ''}</td>`;
+  return `<td ${aviso ? `title="${esc(aviso)}"` : ''} class="editable-cell ${campo === 'vigencia' ? `cell-validity ${dato && !caducada(dato) ? 'cell-current' : ''}` : ''} ${pendiente ? 'cell-missing' : ''} ${campo === 'vigencia' && caducada(dato) ? 'cell-expired' : campo === 'proximaCita' && p[campo] && p[campo] < todayISO() ? 'cell-expired' : ''}"><span class="cell-print">${esc(valor || (campo === 'nombre' && p.menor ? 'MENOR' : '—'))}</span><input type="text" ${campo === 'vigencia' && p.serviciosSociales === false ? 'readonly' : ''} value="${esc(valor)}" data-list-field="${campo}" data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="${listLabels[campo]}, familia ${f.numero}, ${esc(p.nombre || 'persona')}${p.titular ? ', titular' : ''}${pendiente ? ', dato pendiente' : ''}" ${aviso ? `title="${esc(aviso)}"` : ''} ${campo === 'nombre' && p.menor ? 'placeholder="MENOR"' : ''} ${listDates.has(campo) ? 'placeholder="dd/mm/aaaa" inputmode="numeric"' : ''}>${campo === 'vigencia' ? diasVigencia(fechaVigencia) : ''}${campo === 'nacimiento' && !p.titular ? `<label class="list-minor-toggle"><input type="checkbox" data-list-minor data-family-id="${esc(f.id)}" data-person-id="${esc(p.id)}" ${p.menor ? 'checked' : ''} aria-label="Menor de edad, familia ${f.numero}">Menor</label>` : ''}</td>`;
 }
 
 function listNotice(message) {
-  const notice = document.getElementById('listEditNotice');
-  if (notice) {
-    const editandoFecha = [...listDrafts.values()].some(input => listDates.has(input.dataset.listField));
-    notice.hidden = !message || editandoFecha;
-    if (notice.hidden) { notice.textContent = ''; return; }
-    notice.textContent = message;
+  let notice = document.getElementById('listEditNotice');
+  if (!notice) {
+    if (!message) return;
+    notice = document.createElement('div');
+    notice.id = 'listEditNotice';
+    notice.className = 'notice';
+    notice.setAttribute('role', 'status');
+    zonaAvisos().append(notice);
   }
+  const editandoFecha = [...listDrafts.values()].some(input => listDates.has(input.dataset.listField));
+  notice.hidden = !message || editandoFecha;
+  if (notice.hidden) { notice.replaceChildren(); return; }
+  const texto = document.createElement('span');
+  texto.textContent = message;
+  const cerrar = document.createElement('button');
+  cerrar.type = 'button';
+  cerrar.className = 'notice-dismiss';
+  cerrar.setAttribute('aria-label', 'Cerrar aviso');
+  cerrar.textContent = '×';
+  cerrar.addEventListener('click', () => listNotice(''));
+  notice.replaceChildren(texto, cerrar);
 }
 function actualizarEdadListado(input, person) {
   if (!person) return;
@@ -586,13 +884,8 @@ async function guardarCelda(input) {
     setSaveState('Guardando el dato…', 'saving');
     await saveDB(next);
     familias = next;
-    if (listDates.has(campo)) {
-      const anterior = f.personas.find(person => person.id === input.dataset.personId)?.[campo];
-      if (!valor && anterior) {
-        fechasBorradas.set(listKey(input), anterior);
-        if (fechasBorradas.size > 100) fechasBorradas.delete(fechasBorradas.keys().next().value);
-      } else if (valor) fechasBorradas.delete(listKey(input));
-    }
+    historialCeldas.registrar(f, copia, { mes: todayISO().slice(0, 7), personaId: input.dataset.personId, campo });
+    actualizarBotonesHistorial();
     listDrafts.delete(listKey(input));
     delete input.dataset.fieldError;
     input.value = listDates.has(campo) ? displayDate(valor) : valor;
@@ -614,14 +907,18 @@ async function guardarCelda(input) {
       const errorMiembro = pendientesDatos.some(item => item.persona.id === rowPerson?.id);
       const [cl, tx] = rowPerson?.titular ? estadoListado(copia) : errorMiembro ? ['incomplete', 'Sin completar'] : ['', ''];
       const statusCell = row.querySelector('[data-person-status]');
-      if (statusCell) statusCell.innerHTML = tx ? `<span class="badge ${cl}">${tx}</span>` : '';
+      if (statusCell) statusCell.innerHTML = tx ? `<span class="badge ${cl}" title="${esc(descripcionEstado(copia))}">${tx}</span>` : '';
       row.querySelectorAll('[data-list-field]').forEach(field => {
         const person = copia.personas.find(p => p.id === field.dataset.personId);
-        const value = person?.[field.dataset.listField];
+        const value = field.dataset.listField === 'vigencia' ? vigenciaAplicada(person) : person?.[field.dataset.listField];
+        if (field.dataset.listField === 'vigencia' && !listDrafts.has(listKey(field))) {
+          field.value = displayDate(value);
+          field.previousElementSibling.textContent = displayDate(value) || '—';
+        }
         if (field.dataset.listField === 'vigencia') field.closest('td').querySelector('.validity-days').outerHTML = diasVigencia(value);
         if (field.dataset.listField === 'vigencia') field.closest('td').classList.toggle('cell-current', Boolean(value && !caducada(value)));
         const pendiente = pendientesDatos.some(item => item.persona.id === person?.id && item.campos.includes(field.dataset.listField))
-          || (person?.titular && field.dataset.listField === 'proximaCita' && ((!person.proximaCita && caducada(person.vigencia)) || (person.proximaCita && person.proximaCita < todayISO())))
+          || (person?.titular && field.dataset.listField === 'proximaCita' && ((!person.proximaCita && caducada(vigenciaAplicada(person))) || (person.proximaCita && person.proximaCita < todayISO())))
           || (field.dataset.listField === 'documento' && !person?.titular && !person?.menor && !String(value ?? '').trim());
         field.closest('td').classList.toggle('cell-missing', pendiente);
         field.setAttribute('aria-label', `${listLabels[field.dataset.listField]}, familia ${copia.numero}, ${person?.nombre || 'persona'}${pendiente ? ', dato pendiente' : ''}`);
@@ -633,12 +930,15 @@ async function guardarCelda(input) {
       });
     });
     actualizarFiltrosRapidos();
-    const recuento = resumen(familias);
+    const recuento = resumenDelTrimestre();
     app.querySelector('[data-total-beneficiarios]').textContent = recuento.personas;
     app.querySelector('[data-total-familias]').textContent = recuento.familias;
     const contadorFamilia = app.querySelector(`[data-family-member-count="${CSS.escape(copia.id)}"]`);
     const miembros = miembrosContabilizados(copia);
-    if (contadorFamilia) contadorFamilia.textContent = `${miembros} ${miembros === 1 ? 'miembro' : 'miembros'}`;
+    if (contadorFamilia) {
+      contadorFamilia.textContent = miembros;
+      contadorFamilia.setAttribute('aria-label', `${miembros} miembros en la familia ${copia.numero}`);
+    }
     listNotice(listDrafts.size ? 'Hay otras casillas pendientes de corregir o guardar.' : '');
     setSaveState(listDrafts.size ? 'Hay datos pendientes en el listado.' : 'Dato guardado en este ordenador.', listDrafts.size ? 'pending' : 'saved');
     renderPendingActions();
@@ -672,6 +972,51 @@ function recuperarCelda(input) {
   setSaveState(listDrafts.size ? 'Hay datos pendientes en el listado.' : 'Dato anterior recuperado.', listDrafts.size ? 'pending' : 'saved');
   renderDuplicateAlert();
 }
+function actualizarBotonesHistorial() {
+  for (const [accion, pila] of [['undoListEdit', historialCeldas.atras], ['redoListEdit', historialCeldas.adelante]]) {
+    const boton = app.querySelector(`[data-action="${accion}"]`);
+    if (boton) boton.disabled = guardandoAlta || historialListado() || pila.at(-1)?.mes !== todayISO().slice(0, 7);
+  }
+}
+async function recuperarEdicionListado(rehacer = false) {
+  if (guardandoAlta || vista !== 'listado' || historialListado()) return;
+  const bloqueados = [];
+  guardandoAlta = true;
+  actualizarBotonesHistorial();
+  try {
+    await listSaving;
+    if (listDrafts.size) {
+      listNotice('Termina de corregir la casilla o pulsa Escape antes de deshacer otros cambios.');
+      return;
+    }
+    const operacion = historialCeldas.preparar(familias, todayISO().slice(0, 7), rehacer);
+    if (!operacion) return;
+    document.querySelectorAll('#app input, #app select, #app textarea, [data-list-month]').forEach(campo => {
+      if (!campo.disabled) { bloqueados.push(campo); campo.disabled = true; }
+    });
+    const tabla = document.getElementById('beneficiaryTable');
+    const posicion = { top: tabla.scrollTop, left: tabla.scrollLeft };
+    setSaveState(rehacer ? 'Rehaciendo el cambio…' : 'Deshaciendo el cambio…', 'saving');
+    await saveDB(operacion.familias);
+    historialCeldas.confirmar(operacion);
+    renderListado();
+    const nuevaTabla = document.getElementById('beneficiaryTable');
+    nuevaTabla.scrollTop = posicion.top;
+    nuevaTabla.scrollLeft = posicion.left;
+    const { familiaId, personaId, campo } = operacion.cambio;
+    const campoRestaurado = app.querySelector(`[data-family-id="${CSS.escape(familiaId)}"][data-person-id="${CSS.escape(personaId)}"][data-list-field="${campo}"]`)
+      ?? app.querySelector(`[data-family-id="${CSS.escape(familiaId)}"][data-person-id="${CSS.escape(personaId)}"]`);
+    (campoRestaurado ?? nuevaTabla).focus({ preventScroll: true });
+    setSaveState('Cambios guardados.', 'saved');
+  } catch (error) {
+    listNotice(`No se pudo ${rehacer ? 'rehacer' : 'deshacer'}: ${error.message}`);
+    setSaveState('No se pudo recuperar el cambio.', 'error');
+  } finally {
+    bloqueados.forEach(campo => { if (campo.isConnected) campo.disabled = false; });
+    guardandoAlta = false;
+    actualizarBotonesHistorial();
+  }
+}
 async function listoParaSalirListado() {
   await listSaving;
   // También guardar el campo con foco si la acción llega desde el teclado.
@@ -687,7 +1032,7 @@ async function listoParaSalirListado() {
 
 async function limpiarFilasVacias() {
   const next = familias.map(f => ({ ...f, personas: f.personas.filter(p => p.titular || tieneDatosBeneficiario(p) || String(p.proximaCita ?? '').trim()) }))
-    .filter(f => f.personas.some(p => tieneDatosBeneficiario(p) || ['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita'].some(campo => String(p[campo] ?? '').trim())));
+    .filter(f => f.personas.some(p => tieneDatosBeneficiario(p) || ['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita'].some(campo => String(p[campo] ?? '').trim())) || f.seguimiento?.versiones.some(v => v.personas.some(tieneDatosBeneficiario)));
   const eliminadas = familias.reduce((n, f) => n + f.personas.length, 0) - next.reduce((n, f) => n + f.personas.length, 0);
   if (!eliminadas) return false;
   setSaveState('Retirando filas vacías…', 'saving');
@@ -712,23 +1057,44 @@ function sincronizarEncabezadoTabla() {
 }
 
 function renderImportar() {
-  app.innerHTML = `<section class="card import-page"><h2>Cargar listado desde Excel</h2><p>Selecciona un Excel de la plantilla oficial para sustituir las familias guardadas en este ordenador.</p><div class="notice">Comprueba que sea la versión más reciente. La importación sustituye el listado actual. El reparto no se importa y el archivo original no se modifica.</div><div class="excel-drop-zone" data-excel-drop><span class="drop-icon">${icon("excel")}</span><strong>Arrastra aquí tu archivo Excel</strong><span>Un archivo .xlsx de la plantilla oficial, o selecciónalo con el botón.</span></div><div class="actions"><button class="primary" data-action="importExcel">${icon("excel")} Seleccionar archivo Excel</button><input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel><button class="secondary" data-action="section" data-view="listado">Volver al listado</button></div><details class="backup-help"><summary>Detalles sobre el Excel y las copias</summary><div class="notice">El Excel generado contiene las hojas Listado, Reparto y Resumen. La plantilla admite hasta 995 beneficiarios; Reparto y el resumen por tamaño contemplan familias de 1 a 10 miembros.</div></details>${informeImportacion()}${isTauri() ? `<section class="owner-tools"><h3>Herramientas del propietario</h3><p>Borra de este ordenador las familias, el reparto, el historial de importación y las copias de recuperación.</p><button type="button" class="danger" data-action="resetAllData">Eliminar todos los datos de este ordenador</button></section>` : ''}</section>`;
+  app.innerHTML = `<section class="card import-page"><div class="page-heading"><div><p class="section-eyebrow">Trimestral</p><h2>Cargar listado desde Excel</h2><p>Actualiza las familias con un archivo .xlsx de la plantilla oficial.</p></div><button class="secondary" data-action="section" data-view="listado">Volver al listado</button></div><div class="notice import-warning"><strong>Comprueba que sea el archivo más reciente.</strong> Las familias que no aparezcan se darán de baja desde el mes actual y conservarán su histórico. Podrás confirmar antes de cargar los datos.</div><div class="excel-drop-zone" data-excel-drop><span class="drop-icon">${icon("excel")}</span><strong>Arrastra aquí tu archivo Excel</strong><span>O selecciónalo desde tu equipo.</span><button class="primary" data-action="importExcel">${icon("excel")} Seleccionar archivo Excel</button><input id="importExcel" class="hidden" type="file" accept=".xlsx" data-import-excel></div><details class="backup-help"><summary>Qué cambia al cargar y qué contiene cada Excel</summary><div class="import-help-content"><p>El archivo original se conserva. Las bajas anteriores no se reactivan al importar y los números de familias archivadas siguen reservados.</p><dl><div><dt>Excel trimestral · Listado y Resumen</dt><dd>Se genera desde Listado, admite hasta 995 beneficiarios y puede cargarse aquí para recuperar o trasladar el listado.</dd></div><div><dt>Excel mensual · Resumen mensual y Reparto</dt><dd>Se genera desde Resumen mensual para enviar las cifras del mes al almacén. No se importa como histórico de meses.</dd></div></dl></div></details>${informeImportacion()}${isTauri() ? `<details class="owner-tools"><summary>Mantenimiento de datos</summary><p>Borra de este ordenador las familias, todos los resúmenes y repartos mensuales, el historial de importación y las copias de recuperación.</p><button type="button" class="danger" data-action="resetAllData">Eliminar todos los datos de este ordenador</button></details>` : ''}</section>`;
+}
+
+function avisoCambioTrimestre() {
+  const meses = mesesTrimestre(mesListado);
+  const cierre = mesListado === meses[2];
+  const referencia = new Date(`${meses[0]}-01T12:00:00Z`);
+  referencia.setUTCMonth(referencia.getUTCMonth() + (cierre ? 3 : -3));
+  const otroMes = referencia.toISOString().slice(0, 7);
+  const anterior = cierre ? mesListado : otroMes;
+  const siguiente = cierre ? otroMes : mesListado;
+  const bajas = familias.filter(f => visibleEnTrimestre(f, anterior) && !visibleEnTrimestre(f, siguiente) && familiaEnMes(f, siguiente)?.deAlta === false);
+  if (!bajas.length) return '';
+  return `<details class="notice quarter-departures"><summary><strong>${bajas.length} familias de baja ${cierre ? 'quedarán fuera del próximo listado trimestral' : 'han quedado fuera de este listado trimestral'}</strong> · Ver familias</summary><p>Se conservan en el histórico. Puedes consultarlas con «Ver familias archivadas».</p><ul>${bajas.map(f => {
+    const version = familiaEnMes(f, anterior) ?? f;
+    const t = version.personas.find(p => p.titular) ?? version.personas[0];
+    return `<li><strong>Familia ${esc(version.numero)}</strong> · ${esc([t?.nombre, t?.apellidos].filter(Boolean).join(' ') || 'Titular sin nombre')}${t?.documento ? ` · ${esc(t.documento)}` : ''}</li>`;
+  }).join('')}</ul></details>`;
 }
 
 function renderListado() {
+  listNotice('');
   app.innerHTML = `<section class="card list-print-card" aria-label="Listado de beneficiarios"><div class="list-controls" role="region" aria-label="Herramientas del listado">
-    <div class="list-workspace-heading"><div><h2>Beneficiarios</h2><p class="list-intro">Familias agrupadas · edición directa en la tabla</p></div><div class="list-workspace-actions"><div class="list-workspace-action-buttons"><button class="secondary" data-action="exportExcel">${icon("excel")} Generar Excel</button><button class="secondary" data-action="printListado">Imprimir</button></div><details class="status-legend"><summary>Significado de los estados</summary><ul><li><span class="badge incomplete">Sin completar</span><span>Faltan datos importantes. La fila ya está guardada.</span></li><li><span class="badge ok">Correcta</span><span>Datos completos y vigencia al día sin vencer en 60 días, o caducada con próxima cita vigente.</span></li><li><span class="badge warn">Próxima</span><span>Alguna vigencia vence en los próximos 60 días.</span></li><li><span class="badge expired">Caducada</span><span>Hay una vigencia vencida.</span></li></ul></details></div></div>
-    <div class="summary list-summary"><div class="stat"><strong data-total-familias>${resumen(familias).familias}</strong>Familias</div><div class="stat"><strong data-total-beneficiarios>${resumen(familias).personas}</strong>Beneficiarios</div><div class="stat"><strong>${familias.filter(f => (f.personas.find(p => p.titular) ?? f.personas[0])?.proximaCita).length}</strong>Con próxima cita</div></div>
-    <div class="toolbar list-filters"><label class="family-search" for="familyNumber">N.º de familia<input id="familyNumber" value="${esc(numeroFamilia)}" inputmode="numeric" placeholder="Todos" data-family-search></label><label class="text-search" for="search">Nombre o documento<input value="${esc(busqueda)}" id="search" class="search" placeholder="Buscar en el listado" data-search></label><button class="primary list-add-family" data-action="newFamily" title="Se asignará el primer número libre: ${numeroLibre(familias)}">${icon("add")} Añadir familia</button>${familiasEliminadas.length ? `<button class="secondary list-undo-family" data-action="undoDeleteFamily" title="Deshacer el último borrado en la familia ${familiasEliminadas.at(-1).familia.numero}">${icon("restore")} Deshacer borrado</button>` : ''}<button class="secondary" data-action="sortMembers" aria-pressed="${ordenListado.personas.columna === 'miembros'}">Ordenar nº de miembros</button><button class="secondary table-nav-button" data-action="tableStart" title="Ir al inicio de la tabla">↑ Inicio</button><button class="secondary table-nav-button" data-action="tableEnd" title="Ir al final de la tabla">↓ Final</button></div>
+    <div class="list-workspace-heading"><div><h2>Beneficiarios</h2><p class="list-intro">Edita las casillas; los cambios se guardan al salir.</p></div><div class="list-workspace-actions"><div class="list-workspace-action-buttons"><button class="primary" data-action="exportExcel">${icon("excel")} Generar Excel trimestral</button><button class="secondary" data-action="printListado">Imprimir</button></div><details class="status-legend"><summary>Ayuda del listado</summary><div class="help-panel"><h3>Edición y recuentos</h3><p>La derivación, el origen y la vigencia se comparten con toda la familia y se editan en la fila del titular. Busca por nombre, documento o número para ver juntos a sus miembros.</p><p>La situación De alta / De baja aparece junto al botón de dos flechas, que la cambia desde el mes de referencia. Al pasar el ratón sobre el botón puedes ver la acción y el mes. Las bajas se conservan durante su trimestre; después puedes consultarlas con «Ver familias archivadas». Las familias cargadas sin historial se registran de alta desde el mes de carga.</p><h3>Significado de los estados</h3><ul><li><span class="badge incomplete">Sin completar</span><span>Faltan datos importantes. La fila ya está guardada.</span></li><li><span class="badge ok">Correcta</span><span>Datos completos. La vigencia no vence en los próximos 60 días.</span></li><li><span class="badge warn">Próxima</span><span>La vigencia vence en los próximos 60 días.</span></li><li><span class="badge expired">Caducada</span><span>La vigencia ha vencido. El mensual mantiene un margen de 90 días, incluido el día 90. Revisa la renovación y anota la próxima cita.</span></li><li><span class="badge expired">Fuera de plazo</span><span>La cita es pasada, inválida o posterior a vigencia + 90 días. Revisa la cita; el recuento depende de la vigencia.</span></li><li><span class="badge expired">Fuera de recuento</span><span>Han pasado más de 90 días desde el vencimiento. Una cita no amplía ese plazo. La participación anterior en el trimestre se conserva.</span></li></ul><p>Si no procede de Servicios Sociales, se aplica un máximo de tres meses desde la derivación, sin ampliar una vigencia manual anterior.</p></div></details></div></div>
+    <div class="summary list-summary"><div class="stat"><strong data-total-familias>${resumenDelTrimestre().familias}</strong>Familias</div><div class="stat"><strong data-total-beneficiarios>${resumenDelTrimestre().personas}</strong>Beneficiarios</div><div class="stat"><strong>${familiasEnListado().filter(f => (f.personas.find(p => p.titular) ?? f.personas[0])?.proximaCita).length}</strong>Con próxima cita</div></div>
+    ${avisoCambioTrimestre()}<div class="list-lifecycle-tools"><span>Altas y bajas desde <strong>${esc(nombreMes(mesListado))}</strong></span><label class="list-archive-toggle"><input type="checkbox" data-show-archived ${verArchivadas ? 'checked' : ''}>Ver familias archivadas</label>${historialListado() ? '<span class="history-hint">Consulta de otro mes: los datos personales están en modo lectura.</span>' : ''}</div>
+    <div class="toolbar list-filters"><label class="family-search" for="familyNumber">N.º de familia${campoConBorrado(`<input id="familyNumber" value="${esc(numeroFamilia)}" inputmode="numeric" placeholder="Todos" data-family-search>`, numeroFamilia, "número de familia")}</label><label class="text-search" for="search">Nombre o documento${campoConBorrado(`<input value="${esc(busqueda)}" id="search" class="search" placeholder="Nombre, documento o menores" data-search>`, busqueda, "búsqueda")}</label><button class="primary list-add-family" data-action="newFamily" title="Se asignará el primer número libre: ${numeroLibre(familias)}">${icon("add")} Añadir familia</button>${familiasEliminadas.length ? `<button class="secondary list-undo-family" data-action="undoDeleteFamily" title="Deshacer el último borrado en la familia ${familiasEliminadas.at(-1).familia.numero}">${icon("restore")} Deshacer borrado</button>` : ''}</div>
     <section class="pending-workspace" aria-label="Filtros y detalles"><div class="pending-toolbar"><div class="quick-filters" role="group" aria-label="Filtrar familias pendientes">${filtrosRapidos.map(([id]) => `<button type="button" class="secondary" data-action="quickFilter" data-quick-filter="${id}"></button>`).join('')}</div><div data-pending-overview></div><details class="pending-actions" id="pendingActions"><summary>Ver detalles <span class="pending-count">0</span></summary><div data-pending-list></div></details></div></section>
     <div id="activeListFilters" class="active-list-filters" role="status" hidden></div>
-    <p class="filter-help">La búsqueda conserva juntos a los miembros de cada familia.</p><p class="list-edit-help">Los cambios se guardan al salir de la casilla; derivación y vigencia son comunes a la familia.</p><p id="listEditNotice" class="notice" role="status" hidden></p>
   </div>
+  <div class="list-print-heading"><img src="${companyLogo}" alt="Banco de Alimentos de Tenerife"><h2 id="listPrintTitle">Listado de beneficiarios · ${etiquetaTrimestre()}</h2><p id="listPrintFilters"></p></div>
   <div class="table-wrap" id="beneficiaryTable" tabindex="0" aria-label="Tabla de beneficiarios"><table><thead id="listHead"><tr><th>N.º</th><th>Nombre</th><th>Apellidos</th><th>Documento</th><th>Nacimiento</th><th>Edad</th><th>Derivación</th><th>Vigencia</th><th>Próxima cita</th><th>Estado</th><th>Acciones</th></tr></thead><tbody id="rows"></tbody></table></div>
-  <div class="list-bottom-bar"><p id="counter" class="list-counter"></p><div class="list-zoom-controls" role="group" aria-label="Zoom del listado"><button type="button" class="secondary" data-action="resetListZoom" title="Restablecer tamaño al 100 %" aria-label="Restablecer zoom al 100 %"><output id="listZoomValue">${zoomListado}%</output></button><button type="button" class="secondary" data-action="changeListZoom" data-zoom-step="-10" aria-label="Reducir zoom">−</button><input type="range" min="70" max="150" step="10" value="${zoomListado}" data-list-zoom aria-label="Zoom del listado" aria-describedby="listZoomValue"><button type="button" class="secondary" data-action="changeListZoom" data-zoom-step="10" aria-label="Aumentar zoom">+</button></div></div></section>`;
+  <div class="list-bottom-bar"><p id="counter" class="list-counter" role="status"></p><div class="list-edit-history" role="group" aria-label="Historial de edición"><button type="button" class="secondary" data-action="undoListEdit" title="Deshacer edición (Ctrl+Z)" disabled>↶ Deshacer</button><button type="button" class="secondary" data-action="redoListEdit" title="Rehacer edición (Ctrl+Mayús+Z o Ctrl+Y)" disabled>↷ Rehacer</button></div><div class="list-table-navigation"><button class="secondary table-nav-button" data-action="tableStart" title="Ir al inicio de la tabla">↑ Inicio</button><button class="secondary table-nav-button" data-action="tableEnd" title="Ir al final de la tabla">↓ Final</button></div><div class="list-zoom-controls" role="group" aria-label="Zoom del listado"><button type="button" class="secondary" data-action="resetListZoom" title="Restablecer tamaño al 100 %" aria-label="Restablecer zoom al 100 %"><output id="listZoomValue">${zoomListado}%</output></button><button type="button" class="secondary" data-action="changeListZoom" data-zoom-step="-10" aria-label="Reducir zoom">−</button><input type="range" min="70" max="150" step="10" value="${zoomListado}" data-list-zoom aria-label="Zoom del listado" aria-describedby="listZoomValue"><button type="button" class="secondary" data-action="changeListZoom" data-zoom-step="10" aria-label="Aumentar zoom">+</button></div></div></section>`;
   aplicarZoomListado(zoomListado);
+  actualizarBotonesHistorial();
   filterTable();
   renderPendingActions();
+  if (historialListado()) app.querySelectorAll('[data-list-field], [data-list-origin], [data-list-minor], [data-action="newFamily"], [data-action="addFamilyPerson"], [data-action="deleteFamily"], [data-action="deleteMember"]').forEach(el => el.disabled = true);
   renderExcelNotice();
   sincronizarEncabezadoTabla();
   renderDuplicateAlert();
@@ -737,18 +1103,20 @@ function renderListado() {
 function estadoListado(f) {
   return estado(f);
 }
+function coincideBusquedaPersona(persona, consulta) {
+  if (!consulta) return true;
+  const texto = `${persona.nombre ?? ''} ${persona.apellidos ?? ''} ${persona.documento ?? ''}`.toLowerCase();
+  if (texto.includes(consulta)) return true;
+  if (consulta !== 'menor' && consulta !== 'menores') return false;
+  const anos = edad(persona.nacimiento);
+  return anos !== '' ? anos < 18 : Boolean(persona.menor);
+}
+
 function coincideEstado(f) {
   return coincideFiltro(f, filtroEstado);
 }
 function filterTable() {
   actualizarFiltrosRapidos();
-  const memberSort = app.querySelector('[data-action="sortMembers"]');
-  if (memberSort) {
-    const orden = ordenListado.personas;
-    memberSort.setAttribute('aria-pressed', String(orden.columna === 'miembros'));
-    memberSort.textContent = `Ordenar nº de miembros ${orden.columna === 'miembros' ? (orden.direccion === 1 ? '↑' : '↓') : '↕'}`;
-    memberSort.title = orden.columna === 'miembros' && orden.direccion === 1 ? 'Orden actual: de menos a más miembros. Pulsa para invertirlo.' : 'Ordenar de menos a más miembros';
-  }
   const q = (document.getElementById("search")?.value || "").toLowerCase().trim();
   busqueda = q;
   numeroFamilia = document.getElementById("familyNumber")?.value.trim() || "";
@@ -763,17 +1131,21 @@ function filterTable() {
   }
 
   if (modoListado === 'personas') {
-    const all = familias.flatMap(f => f.personas.map(p => ({ f, p })));
-    const grupos = ordenarListado(familias.filter(f => (!familiasCoincidencia || familiasCoincidencia.has(f.id)) && coincideEstado(f) && coincideNumeroFamilia(f.numero, numeroFamilia) && (!q || f.personas.some(p => (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q)))), (f, col) => {
+    const listado = familiasEnListado();
+    const all = listado.flatMap(f => f.personas.map(p => ({ f, p })));
+    const grupos = ordenarListado(listado.filter(f => (!familiasCoincidencia || familiasCoincidencia.has(f.id)) && coincideEstado(f) && coincideNumeroFamilia(f.numero, numeroFamilia) && (!q || f.personas.some(p => coincideBusquedaPersona(p, q)))), (f, col) => {
       const titular = f.personas.find(p => p.titular) ?? f.personas[0];
       if (col === 'numero') return f.numero;
       if (col === 'miembros') return miembrosContabilizados(f);
+      if (col === 'alta') return f.deAlta !== false ? 1 : 0;
       if (col === 'edad') return edad(titular?.nacimiento);
+    if (col === 'vigencia') return vigenciaAplicada(titular);
+    if (col === 'serviciosSociales') return titular?.serviciosSociales !== false ? 1 : 0;
       if (col === 'estado') return estadoListado(f)[1];
       return titular?.[col];
     });
     const list = grupos.flatMap((f, grupo) => [...f.personas].sort((a, b) => Number(Boolean(b.titular)) - Number(Boolean(a.titular))).map(p => ({ f, p, grupo })));
-    document.getElementById('listHead').innerHTML = encabezadosListado([['numero', 'Familia'], ['nombre', 'Nombre'], ['apellidos', 'Apellidos'], ['documento', 'Documento'], ['nacimiento', 'Nacimiento'], ['edad', 'Edad'], ['derivacion', 'Derivación'], ['vigencia', 'Vigencia'], ['proximaCita', 'Próxima cita'], ['estado', 'Estado']]);
+    document.getElementById('listHead').innerHTML = encabezadosListado([['numero', 'Familia'], ['miembros', 'Miembros'], ['alta', 'Situación'], ['nombre', 'Nombre'], ['apellidos', 'Apellidos'], ['documento', 'Documento'], ['nacimiento', 'Nacimiento'], ['edad', 'Edad'], ['derivacion', 'Derivación'], ['serviciosSociales', 'Servicios sociales'], ['vigencia', 'Vigencia'], ['proximaCita', 'Próxima cita'], ['estado', 'Estado de vigencia']]);
     document.getElementById('rows').innerHTML = list.map(({ f, p, grupo }, index) => {
       const primero = index === 0 || list[index - 1].f.id !== f.id;
       const ultimo = index === list.length - 1 || list[index + 1].f.id !== f.id;
@@ -781,11 +1153,12 @@ function filterTable() {
       const celda = campo => listCell(f, p, campo, pendientes);
       const errorMiembro = !p.titular && pendientes.length > 0;
       const [cl, tx] = p.titular ? estadoListado(f) : errorMiembro ? ['incomplete', 'Sin completar'] : ['', ''];
-      const match = q && (p.nombre + ' ' + p.apellidos + ' ' + p.documento).toLowerCase().includes(q);
-      return `<tr data-row-family="${esc(f.id)}" data-row-person="${esc(p.id)}" class="family-group ${grupo % 2 ? 'group-tinted' : ''} ${primero ? 'family-start' : ''} ${ultimo ? 'family-end' : ''} ${p.titular ? 'titular-row' : ''} ${match ? 'search-match' : ''}">${primero ? `<td class="family-group-number ${f.personas.length === 1 ? 'family-single' : ''}" rowspan="${f.personas.length}"><div class="family-cell-layout"><div class="family-cell-info"><small class="family-label">Familia</small><span class="family-number">${f.numero}</span><small data-family-member-count="${esc(f.id)}">${miembrosContabilizados(f)} ${miembrosContabilizados(f) === 1 ? 'miembro' : 'miembros'}</small></div><div class="family-cell-actions" role="group" aria-label="Acciones de la familia ${f.numero}"><button type="button" class="secondary family-add-member" data-action="addFamilyPerson" data-id="${esc(f.id)}" aria-label="Añadir miembro a la familia ${f.numero}" title="Añadir miembro a la familia ${f.numero}">${icon('personAdd')}</button><button type="button" class="secondary family-delete-cross" data-action="deleteFamily" data-id="${esc(f.id)}" title="Borrar familia ${f.numero}" aria-label="Borrar familia ${f.numero}">${icon('trash')}</button></div></div></td>` : ''}${celda('nombre')}${celda('apellidos')}${celda('documento')}${celda('nacimiento')}<td class="age-cell">${edad(p.nacimiento) === '' ? '—' : edad(p.nacimiento)}</td>${celda('derivacion')}${celda('vigencia')}${celda('proximaCita')}<td data-person-status>${tx ? `<span class="badge ${cl}">${tx}</span>` : ''}</td><td class="list-actions-column">${!p.titular ? `<button class="danger" data-action="deleteMember" data-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="Borrar miembro de la familia ${f.numero}" title="Borrar esta persona">${icon("trash")}</button>` : ''}</td></tr>`;
-    }).join('') || '<tr><td colspan="11" class="empty">No se encontraron familias. Prueba con otros filtros.</td></tr>';
+      const match = q && coincideBusquedaPersona(p, q);
+      return `<tr data-row-family="${esc(f.id)}" data-row-person="${esc(p.id)}" class="family-group ${grupo % 2 ? 'group-tinted' : ''} ${primero ? 'family-start' : ''} ${ultimo ? 'family-end' : ''} ${p.titular ? 'titular-row' : ''} ${match ? 'search-match' : ''}">${primero ? `<td class="family-group-number ${f.personas.length === 1 ? 'family-single' : ''}" rowspan="${f.personas.length}"><div class="family-cell-layout"><div class="family-cell-info"><span class="family-number">#${f.numero}</span></div><div class="family-cell-actions" role="group" aria-label="Acciones de la familia ${f.numero}"><button type="button" class="secondary family-add-member" data-action="addFamilyPerson" data-id="${esc(f.id)}" aria-label="Añadir miembro a la familia ${f.numero}" title="Añadir miembro a la familia ${f.numero}">${icon('personAdd')}</button><button type="button" class="secondary family-delete-cross" data-action="deleteFamily" data-id="${esc(f.id)}" title="Borrar familia ${f.numero}" aria-label="Borrar familia ${f.numero}">${icon('trash')}</button></div></div></td><td class="family-group-members" rowspan="${f.personas.length}"><span data-family-member-count="${esc(f.id)}" aria-label="${miembrosContabilizados(f)} miembros en la familia ${f.numero}">${miembrosContabilizados(f)}</span></td><td class="family-active-cell" data-family-status="${mesListado < (f.seguimiento?.inicio ?? mesListado) ? 'desconocida' : f.deAlta === false ? 'baja' : 'alta'}" rowspan="${f.personas.length}"><div class="family-active-layout"><span class="family-active-label">${mesListado < (f.seguimiento?.inicio ?? mesListado) ? 'Sin historial' : f.deAlta === false ? 'De baja' : 'De alta'}</span>${mesListado < (f.seguimiento?.inicio ?? mesListado) ? '' : `<button type="button" class="secondary family-active-button" data-action="changeListedFamily" data-id="${esc(f.id)}" data-next-active="${f.deAlta === false}" aria-label="${f.deAlta === false ? 'Dar de alta' : 'Dar de baja'} a la familia ${f.numero} desde ${esc(nombreMes(mesListado))}" title="${f.deAlta === false ? 'Dar de alta' : 'Dar de baja'} desde ${esc(nombreMes(mesListado))}">${icon('switch')}</button>`}</div></td>` : ''}${celda('nombre')}${celda('apellidos')}${celda('documento')}${celda('nacimiento')}<td class="age-cell">${edad(p.nacimiento) === '' ? '—' : edad(p.nacimiento)}</td>${celda('derivacion')}${celdaOrigen(f, p)}${celda('vigencia')}${celda('proximaCita')}<td data-person-status>${tx ? `<span class="badge ${cl}" title="${esc(p.titular ? descripcionEstado(f) : 'Completa los datos resaltados de esta persona.')}">${tx}</span>` : ''}</td><td class="list-actions-column">${!p.titular ? `<button class="danger" data-action="deleteMember" data-id="${esc(f.id)}" data-person-id="${esc(p.id)}" aria-label="Borrar miembro de la familia ${f.numero}" title="Borrar esta persona">${icon("trash")}</button>` : ''}</td></tr>`;
+    }).join('') || `<tr><td colspan="14" class="empty"><div class="empty-state"><strong>${!familias.length ? 'Empieza por tu primera familia' : etiquetas.length ? 'No hay coincidencias' : 'No hay familias en este periodo'}</strong><p>${!familias.length ? 'Añade una familia o carga tu listado desde un Excel de la plantilla.' : etiquetas.length ? 'Prueba otra búsqueda o quita los filtros para recuperar el listado.' : 'Selecciona otro mes de referencia o consulta las familias archivadas.'}</p><div class="actions">${!familias.length ? '<button class="primary" data-action="newFamily">Añadir familia</button><button class="secondary" data-action="section" data-view="importar">Cargar Excel</button>' : etiquetas.length ? '<button class="secondary" data-action="clearListFilters">Quitar filtros</button>' : ''}</div></div></td></tr>`;
+    if (historialListado()) app.querySelectorAll('[data-list-field], [data-list-origin], [data-list-minor], [data-action="addFamilyPerson"], [data-action="deleteFamily"], [data-action="deleteMember"]').forEach(el => el.disabled = true);
     actualizarMarcasDuplicadas();
-    document.getElementById('counter').textContent = `Mostrando ${grupos.length} de ${familias.length} familias · ${list.length} de ${all.length} personas`;
+    document.getElementById('counter').textContent = `Mostrando ${grupos.length} de ${listado.length} familias visibles · ${list.length} de ${all.length} personas`;
     return;
   }
 
@@ -920,7 +1293,7 @@ async function borrarMiembroListado(familiaId, personaId) {
   familias = next;
   familiasEliminadas.push({ tipo: 'persona', familia: structuredClone(f), persona: structuredClone(p), indice: f.personas.findIndex(item => item.id === personaId) });
   // No ocultar la familia si el único resultado de la búsqueda era la persona borrada.
-  if (busqueda && !copia.personas.some(item => `${item.nombre} ${item.apellidos} ${item.documento}`.toLowerCase().includes(busqueda))) busqueda = '';
+  if (busqueda && !copia.personas.some(item => coincideBusquedaPersona(item, busqueda))) busqueda = '';
   // Mantener el filtro mientras haya familias que todavía necesiten revisión.
   if (filtroEstado && !familias.some(family => coincideEstado(family))) filtroEstado = '';
   setSaveState('Persona borrada. Puedes recuperarla con Deshacer borrado.', 'saved');
@@ -954,6 +1327,7 @@ async function addPerson() {
   const nueva = persona();
   nueva.derivacion = titular.derivacion;
   nueva.vigencia = titular.vigencia;
+  nueva.serviciosSociales = titular.serviciosSociales !== false;
   editando.personas.push(nueva);
   await changed();
   render();
@@ -972,11 +1346,15 @@ async function updateTitular(index, checked) {
   if (error) mostrarPendiente(error);
 }
 async function updatePerson(i, k, v) {
-  const shared = k === "derivacion" || k === "vigencia";
+  if (k === 'vigencia' && editando.personas[i].serviciosSociales === false) return;
+  const shared = ["derivacion", "vigencia", "serviciosSociales"].includes(k);
   if (shared) {
     const titular = editando.personas.find(person => person.titular) ?? editando.personas[0];
     titular[k] = v;
-    editando.personas.forEach(person => person[k] = v);
+    editando.personas.forEach(person => {
+      person[k] = v;
+      if (k === 'serviciosSociales') person.serviciosSocialesConfigurado = true;
+    });
     app.querySelectorAll(`[data-shared-date="${k}"]`).forEach(input => input.value = displayDate(v));
   } else {
     editando.personas[i][k] = v;
@@ -986,6 +1364,8 @@ async function updatePerson(i, k, v) {
       if (checkbox) checkbox.checked = editando.personas[i].menor;
     }
   }
+  const titularActual = editando.personas.find(person => person.titular);
+  app.querySelectorAll('[data-auto-validity]').forEach(input => input.value = displayDate(vigenciaAplicada(titularActual)));
   // Actualizar solo los avisos conserva el foco y la selección del año.
   const card = app.querySelector(`[data-person="${i}"]`);
   if (k === "nacimiento") {
@@ -1013,7 +1393,7 @@ function renderFormulario() {
   const f = editando;
   document.getElementById("app").innerHTML = `
  <div class="card"><div class="form-head"><div><button class="secondary" data-action="back">${icon("back")} Volver al listado</button><h2>Familia ${f.numero}</h2></div><button class="danger" data-action="removeFamily">${icon("trash")} Eliminar familia</button></div>
- <p style="color:#666">Rellene únicamente los datos de las personas. La edad y el número de miembros se calculan automáticamente. Escriba las fechas como día/mes/año (por ejemplo, 15/06/1967) o use el botón de calendario. Las fechas de derivación y vigencia son comunes a la familia: edítelas en la persona titular. En los demás miembros se muestran como referencia.</p></div>
+ <p class="form-intro">Completa los datos de cada persona. La edad y los miembros se calculan automáticamente.</p><details class="form-help"><summary>Fechas y datos compartidos</summary><p>Escribe las fechas como día/mes/año (por ejemplo, 15/06/1967) o abre el calendario. La derivación, el origen y la vigencia son comunes a la familia: se editan en la persona titular.</p></details></div>
  <div class="notice" id="formValidation" role="status" hidden></div>
  <div class="card">${f.personas.map((p, i) => `
  <div class="person" data-person="${i}"><div class="person-head"><div><h3>${p.titular ? "Titular" : `Miembro ${i + 1}`}</h3><label class="titular-toggle"><input type="checkbox" data-titular data-index="${i}" ${p.titular ? "checked" : ""}> Es titular</label></div><button class="danger" data-action="removePerson" data-index="${i}">${icon("trash")} Eliminar persona</button></div>
@@ -1021,11 +1401,12 @@ function renderFormulario() {
  <div class="grid">
  <div><label>Nombre</label><input value="${esc(p.nombre)}" data-field="nombre" data-index="${i}" ${(p.titular || !p.menor) ? 'required pattern=".*\\S.*"' : ""}></div>
  <div><label>Apellidos</label><input value="${esc(p.apellidos)}" data-field="apellidos" data-index="${i}" ${(p.titular || !p.menor) ? 'required pattern=".*\\S.*"' : ""}></div>
- <div><label>Documento${p.titular ? ' (obligatorio)' : ' (opcional)'}</label><input value="${esc(p.documento)}" data-field="documento" data-index="${i}" ${p.titular ? 'required' : ""}></div>
+ <div><label>Documento${p.menor && !p.titular ? ' (opcional)' : ' (obligatorio)'}</label><input value="${esc(p.documento)}" data-field="documento" data-index="${i}" ${p.titular || !p.menor ? 'required' : ""}></div>
  ${dateField(p, i, "nacimiento", "Fecha de nacimiento", `<small>Edad: <b data-age>${edad(p.nacimiento) === "" ? "—" : edad(p.nacimiento)}</b></small>`)}
  ${p.titular ? dateField(p, i, "derivacion", "Fecha derivación") : sharedDateField(p, "derivacion", "Fecha derivación")}
- ${p.titular ? dateField(p, i, "vigencia", "Vigencia", `<small data-vigencia-status class="date-status ${p.vigencia ? (caducada(p.vigencia) ? "is-expired" : "is-current") : ""}" ${p.vigencia ? "" : "hidden"}>${p.vigencia ? (caducada(p.vigencia) ? "VIGENCIA CADUCADA" : "Vigencia vigente") : ""}</small>`) : sharedDateField(p, "vigencia", "Vigencia")}
- ${p.titular ? dateField(p, i, "proximaCita", "Próxima cita", `<small>Rellénela si la vigencia está caducada y ya tiene cita de renovación.</small>`) : ""}
+ ${p.titular ? `<label class="titular-toggle"><input type="checkbox" data-origin data-index="${i}" ${p.serviciosSociales === false ? "checked" : ""}> No procede de Servicios Sociales</label>` : ""}
+ ${p.titular ? (p.serviciosSociales === false ? automaticValidityField(p) : dateField(p, i, "vigencia", "Vigencia", `<small data-vigencia-status class="date-status ${p.vigencia ? (caducada(p.vigencia) ? "is-expired" : "is-current") : ""}" ${p.vigencia ? "" : "hidden"}>${p.vigencia ? (caducada(p.vigencia) ? "VIGENCIA CADUCADA" : "Vigencia vigente") : ""}</small>`)) : sharedDateField(p, "vigencia", "Vigencia")}
+ ${p.titular ? dateField(p, i, "proximaCita", "Próxima cita", `<small>La cita debe ser de hoy o futura. Puede ser anterior al vencimiento y como máximo 90 días después de la vigencia.</small>`) : ""}
  <div><label>N.º de miembros</label><input value="${f.personas.length}" disabled></div>
  </div></div>`).join("")}
  <div class="actions"><button class="secondary" data-action="addPerson">${icon("add")} Añadir persona</button><button class="primary" data-action="saveFamily">Guardar y volver</button><button class="secondary" data-action="cancelFamily">Descartar cambios pendientes</button></div></div>`;
@@ -1048,11 +1429,13 @@ async function importarArchivoExcel(file) {
     const detail = issues.length
       ? `\n\nSe omitirán ${issues.length} fila${issues.length === 1 ? "" : "s"}:\n${issues.slice(0, 12).map(issue => `• Fila ${issue.row}: ${issue.reason}`).join("\n")}${issues.length > 12 ? `\n• Y ${issues.length - 12} más.` : ""}`
       : "";
-    if (!await confirm(`Se han encontrado ${imported.length} familias y ${count} beneficiarios válidos.${detail}\n\nSe sustituirán los datos actuales de la aplicación. ¿Continuar?`)) return;
+    if (!await confirm(`Se han encontrado ${imported.length} familias y ${count} beneficiarios válidos.${detail}\n\nSe actualizará el listado. Las familias ausentes quedarán de baja desde el mes actual, conservando el histórico; las bajas anteriores no se reactivarán. ¿Continuar?`)) return;
     normalizeTitulares(imported);
     setSaveState("Importando Excel y guardando…", "saving");
-    await saveDB(imported);
-    familias = imported;
+    const incorporadas = incorporarImportacion(familias, imported, todayISO().slice(0, 7));
+    await saveDB(incorporadas);
+    familias = incorporadas;
+    historialCeldas.limpiar();
     familiasCoincidencia = null;
     familiasEliminadas = [];
     ultimoInforme = { archivo: file.name, fecha: new Date().toISOString(), familias: imported.length, personas: count, issues, warnings: imported.warnings ?? [] };
@@ -1061,7 +1444,7 @@ async function importarArchivoExcel(file) {
     editando = null;
     vista = "listado";
     render();
-    setSaveState(`Importación completada: ${familias.length} familias y ${count} personas guardadas${issues.length ? `; ${issues.length} filas omitidas` : ""}.`, "saved");
+    setSaveState(`Importación completada: ${imported.length} familias y ${count} personas cargadas; histórico conservado${issues.length ? `; ${issues.length} filas omitidas` : ""}.`, "saved");
   } catch (error) {
     console.error(error);
     alert(`No se pudo importar el Excel. ${error.message}`);
@@ -1077,6 +1460,17 @@ function reportError(error) {
 }
 
 const app = document.getElementById("app");
+document.addEventListener('keydown', event => {
+  const tecla = event.key.toLowerCase();
+  if (event.defaultPrevented || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)
+    || !['z', 'y'].includes(tecla) || vista !== 'listado' || document.querySelector('dialog[open]')) return;
+  const editable = event.target.closest('input, textarea, [contenteditable="true"]');
+  // Mientras se escribe, el navegador deshace el texto de la propia casilla.
+  if (editable && (!editable.hasAttribute('data-list-field') || listDrafts.has(listKey(editable)))) return;
+  event.preventDefault();
+  if (event.repeat) return;
+  recuperarEdicionListado(tecla === 'y' || event.shiftKey);
+});
 function moverCasilla(input, direccion) {
   const campos = [...app.querySelectorAll('[data-list-field]')].filter(field => !field.disabled);
   let destino;
@@ -1093,24 +1487,30 @@ function moverCasilla(input, direccion) {
 }
 app.addEventListener('keydown', event => {
   const input = event.target;
-  if (!input.hasAttribute('data-list-field') || input.disabled || event.isComposing) return;
-  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z'
-    && listDates.has(input.dataset.listField) && !input.value.trim()) {
-    const person = familias.find(f => f.id === input.dataset.familyId)?.personas.find(p => p.id === input.dataset.personId);
-    if (person?.[input.dataset.listField]) {
+  if (input.hasAttribute('data-month-count') && !input.disabled && !input.readOnly
+    && !event.isComposing && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
-      recuperarCelda(input);
+      const fields = [...app.querySelectorAll('[data-month-count]')];
+      const destination = fields[fields.indexOf(input) + (event.key === 'ArrowDown' ? 1 : -1)];
+      if (destination) {
+        destination.focus({ preventScroll: true });
+        destination.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      }
       return;
     }
-    const anterior = fechasBorradas.get(listKey(input));
-    if (person && anterior) {
+    const current = input.value.trim() === '' ? 0 : Number(input.value);
+    const incrementa = event.key === 'ArrowRight';
+    const next = Math.max(0, Math.min(9999, current + (incrementa ? 1 : -1)));
+    if (Number.isSafeInteger(next)) {
       event.preventDefault();
-      input.value = displayDate(anterior);
-      listDrafts.set(listKey(input), input);
-      listSaving = listSaving.then(() => guardarCelda(input)).catch(reportError);
-      return;
+      input.value = String(next);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     }
+    return;
   }
+  if (!input.hasAttribute('data-list-field') || input.disabled || event.isComposing) return;
+  if (input.readOnly && !['Tab', 'Enter', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     recuperarCelda(input);
@@ -1186,6 +1586,8 @@ if (headerLogo) headerLogo.title = `Gestor de beneficiarios · versión ${appVer
 const actions = {
   changeListZoom: target => aplicarZoomListado(zoomListado + Number(target.dataset.zoomStep)),
   resetListZoom: () => aplicarZoomListado(100),
+  undoListEdit: () => recuperarEdicionListado(),
+  redoListEdit: () => recuperarEdicionListado(true),
   newFamily, back, addPerson,
   saveFamily: () => back(),
   cancelFamily: () => { editando = null; dateDrafts.clear(); vista = "listado"; setSaveState("Cambios pendientes descartados.", "saved"); render(); },
@@ -1210,11 +1612,16 @@ const actions = {
       setSaveState('Borrando todos los datos…', 'saving');
       await resetDB();
       await resetReparto();
+      await resetMensuales();
       await saveImportReport(null);
       familias = [];
       familiasCoincidencia = null;
       familiasEliminadas = [];
-      reparto = prepararReparto(null);
+      historialCeldas.limpiar();
+      mensuales = {};
+      mensual = crearMensual(todayISO().slice(0, 7));
+      reparto = mensual.reparto;
+      mensualPendiente = false;
       ultimoInforme = null;
       editando = null;
       dateDrafts.clear();
@@ -1239,6 +1646,9 @@ const actions = {
       await limpiarFilasVacias();
     }
     vista = siguiente;
+    if (['listado', 'resumen', 'importar'].includes(vista)) ultimaTrimestral = vista;
+    if (['mensual', 'atenciones', 'reparto'].includes(vista)) ultimaMensual = vista;
+    avisoExcel = '';
     render();
     if (vista === 'listado' && posicionListado) {
       const posicion = posicionListado;
@@ -1254,7 +1664,116 @@ const actions = {
     } else window.scrollTo({ top: 0, behavior: 'instant' });
   },
   sortColumn: target => { const orden = ordenListado[modoListado]; orden.direccion = orden.columna === target.dataset.column ? -orden.direccion : 1; orden.columna = target.dataset.column; filterTable(); },
+  useActiveFamilies: async () => {
+    if (!await confirm('El mensual contará las familias de alta y con vigencia válida al cierre del mes. Se conservará una copia del recuento anterior. ¿Aplicar este criterio a este mes?')) return;
+    mensual = activarAltas(mensual, familias);
+    await guardarMensual();
+    render();
+  },
+  restorePreviousCounts: async () => {
+    if (!mensual.recuentoAnterior) return;
+    const copia = mensual.recuentoAnterior;
+    mensual = { ...mensual, recuentoDesdeAltas: false, recuentoDesdeAtenciones: copia.desdeAtenciones, tamanos: [...copia.tamanos], edades: [...copia.edades] };
+    delete mensual.recuentoAnterior;
+    await guardarMensual(); render();
+  },
+  activeFamily: target => {
+    mesListado = mensual.mes;
+    const f = familias.find(f => f.id === target.dataset.id);
+    if (!f) return;
+    familiasCoincidencia = null;
+    numeroFamilia = String(f.numero); busqueda = ''; filtroEstado = '';
+    vista = ultimaTrimestral = 'listado'; render();
+  },
+  changeActiveFamily: cambiarSituacionDesdeAltas,
+  activeView: target => {
+    if (!['tabla', 'cuadricula'].includes(target.dataset.mode)) return;
+    modoAltas = target.dataset.mode;
+    try { localStorage.setItem('gestor-beneficiarios-vista-altas', modoAltas); } catch { /* Sigue funcionando durante esta sesión. */ }
+    renderAltas();
+    app.querySelector(`[data-action="activeView"][data-mode="${modoAltas}"]`)?.focus({ preventScroll: true });
+  },
+  activeGridPage: target => cambiarPaginaAltas(Number(target.dataset.page)),
+  changeListedFamily: async target => {
+    const id = target.dataset.id, mes = mesListado;
+    const alta = target.dataset.nextActive === 'true';
+    const actual = familias.find(f => f.id === id);
+    if (!actual || mes < (actual.seguimiento?.inicio ?? mes)) return;
+    const table = document.getElementById('beneficiaryTable');
+    const posicion = { top: table.scrollTop, left: table.scrollLeft };
+    const devolverFoco = document.activeElement === target;
+    target.disabled = true;
+    guardandoAlta = true;
+    try {
+      const next = familias.map(f => f.id === id ? cambiarAlta(f, mes, alta) : f);
+      await saveDB(next);
+      familias = next;
+      renderListado();
+      const nuevaTabla = document.getElementById('beneficiaryTable');
+      nuevaTabla.scrollTop = posicion.top;
+      nuevaTabla.scrollLeft = posicion.left;
+      if (devolverFoco) {
+        app.querySelector(`[data-action="changeListedFamily"][data-id="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+      }
+    } finally {
+      target.disabled = false;
+      guardandoAlta = false;
+    }
+  },
+  useAttendances: async () => {
+    if (mensual.recuentoDesdeAtenciones) return;
+    if ([...mensual.tamanos, ...mensual.edades].some(n => Number(n) > 0)
+      && !await confirm('Este mes ya tiene cifras manuales. Se sustituirán por el recuento de las familias marcadas como atendidas. ¿Continuar?')) return;
+    mensual = cambiarOrigenRecuento(mensual, true);
+    await guardarMensual();
+    render();
+  },
+  useManualCounts: async () => {
+    if (!await confirm('Las cifras actuales quedarán disponibles para editarlas a mano. Los registros automáticos de este mes se conservarán. ¿Continuar?')) return;
+    mensual = { ...cambiarOrigenRecuento(mensual, false), recuentoDesdeAltas: false };
+    await guardarMensual();
+    render();
+  },
+  attendanceFamily: target => {
+    const row = filasAtenciones(mensual, familias).find(f => f.numero === Number(target.dataset.number));
+    if (!row?.familia) return;
+    familiasCoincidencia = null;
+    numeroFamilia = String(row.familia.numero);
+    busqueda = ''; filtroEstado = '';
+    vista = ultimaTrimestral = 'listado';
+    render();
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  },
   exportSummary,
+  exportMonthlyImage,
+  prepareMonthlyEmail: () => {
+    const resumen = resumenMensualParaCompartir();
+    if (resumen) prepararCorreoMensual(resumen, () => copiarImagenMensual(resumen, companyLogo));
+  },
+  exportMonthly: async target => {
+    const errores = erroresExportacionMensual(mensual);
+    if (errores.length) {
+      vista = 'mensual';
+      avisoExcel = `No se puede generar el Excel mensual. ${errores.join(' ')}`;
+      render();
+      app.querySelector(!mensual.entidad.trim() ? '[data-month-entity]' : '[data-month-count]')?.focus();
+      return;
+    }
+    target.disabled = true;
+    target.textContent = 'Generando Excel…';
+    try {
+      const generated = await exportMonthlyExcel(structuredClone(mensual));
+      if (generated) {
+        avisoExcel = isTauri() ? `Resumen mensual guardado en ${generated.path}.${generated.opened ? '' : ' Puedes abrirlo desde esa ubicación.'}` : 'Resumen mensual generado. Se ha solicitado su descarga al navegador.';
+        renderExcelNotice();
+      }
+    } catch (error) {
+      alert(`No se pudo generar el resumen mensual. ${detalleErrorExcel(error)}`);
+    } finally {
+      target.disabled = false;
+      target.innerHTML = `${icon('excel')} Generar Excel mensual`;
+    }
+  },
   printReparto: () => window.print(),
   printListado: () => window.print(),
   addRepartoRow: async () => {
@@ -1262,7 +1781,7 @@ const actions = {
     reparto.push({ nombre: "Nuevo alimento", cantidad: "" });
     setSaveState("Guardando Reparto…", "saving");
     try {
-      await saveReparto(reparto);
+      await guardarMensual();
       setSaveState("Reparto guardado.", "saved");
       render();
     } catch (error) { reportError(error); }
@@ -1274,7 +1793,7 @@ const actions = {
     reparto.splice(index, 1);
     setSaveState("Guardando Reparto…", "saving");
     try {
-      await saveReparto(reparto);
+      await guardarMensual();
       setSaveState("Reparto guardado.", "saved");
       render();
     } catch (error) { reportError(error); }
@@ -1282,7 +1801,6 @@ const actions = {
   addFamilyPerson: target => iniciarAlta(target.dataset.id),
   deleteFamily: target => borrarFamiliaListado(target.dataset.id),
   deleteMember: target => borrarMiembroListado(target.dataset.id, target.dataset.personId),
-  sortMembers: () => { const orden = ordenListado.personas; orden.direccion = orden.columna === 'miembros' ? -orden.direccion : 1; orden.columna = 'miembros'; filterTable(); },
   undoDeleteFamily: recuperarFamilia,
   tableStart: () => document.getElementById('beneficiaryTable')?.scrollTo({ top: 0, behavior: 'smooth' }),
   tableEnd: () => { const table = document.getElementById('beneficiaryTable'); table?.scrollTo({ top: table.scrollHeight, behavior: 'smooth' }); },
@@ -1296,14 +1814,17 @@ const actions = {
       if (nuevaTabla) { nuevaTabla.scrollTop = top; nuevaTabla.scrollLeft = left; }
       target = app.querySelector('[data-action="exportExcel"]') ?? target;
     }
-    const listadoExportar = familiasParaExportar(familias);
-    if (avisarExportacionBloqueada(listadoExportar)) return;
+    if (historialIncompleto(familias, mesesTrimestre(mesListado)[2])) { avisoExcel = 'No hay historial suficiente para reconstruir ese trimestre. Conserva el Excel anterior.'; renderExcelNotice(); return; }
+    const listadoExportar = familiasParaExportar(familiasRecuentoTrimestral(familias, mesListado));
+    if (findDuplicateGroups(listadoExportar).length) { avisoExcel = 'Revisa los posibles duplicados antes de generar el Excel trimestral.'; renderExcelNotice(); return; }
+    const incompletas = listadoExportar.flatMap(f => erroresFamilia(f).filter(e => !['proximaCita'].includes(e.campo)));
+    if (incompletas.length) { avisoExcel = `Revisa los datos antes de generar el Excel: ${incompletas[0].mensaje}`; renderExcelNotice(); return; }
     target.disabled = true;
     target.textContent = "Generando Excel…";
     avisoExcel = "";
     renderExcelNotice();
     try {
-      const generated = await exportExcel(listadoExportar, reparto);
+      const generated = await exportExcel(listadoExportar, { trimestre: mesListado });
       if (generated) {
         avisoExcel = isTauri() ? `Excel generado y guardado correctamente en ${generated.path}.${generated.opened ? '' : ' No se pudo abrir automáticamente; puedes abrirlo desde esa ubicación.'}` : "Excel generado. Se ha solicitado su descarga al navegador.";
         renderExcelNotice();
@@ -1311,10 +1832,10 @@ const actions = {
     }
     catch (error) {
       console.error(error);
-      alert(`No se pudo generar el Excel. ${error.message}`);
+      alert(`No se pudo generar el Excel. ${detalleErrorExcel(error)}`);
     } finally {
       target.disabled = false;
-      target.textContent = "Generar Excel";
+      target.innerHTML = `${icon('excel')} Generar Excel trimestral`;
     }
   },
   importExcel: () => document.getElementById("importExcel").click(),
@@ -1331,17 +1852,123 @@ async function handleActionClick(event) {
   if (!target || !event.currentTarget.contains(target)) return;
   try {
     if (guardandoAlta) return;
+    if (!validarCamposMensuales()) return;
+    // El portapapeles debe solicitarse durante el gesto, antes de esperar al disco.
+    if (target.dataset.action === 'copyMonthlyImage') {
+      await copyMonthlyImage(target);
+      return;
+    }
+    // Permite conservar el documento aunque el almacenamiento local esté lleno.
+    if (mensualPendiente && target.dataset.action !== 'exportMonthly') await guardarMensual();
     if (!await listoParaSalirListado()) return;
     await actions[target.dataset.action]?.(target);
   } catch (error) { reportError(error); }
 }
+app.addEventListener('keydown', async event => {
+  const input = event.target;
+  if (!input.hasAttribute('data-attendance-search') || event.key !== 'Enter' || event.isComposing) return;
+  event.preventDefault();
+  if (marcandoRapido || event.repeat) return;
+  const status = app.querySelector('[data-attendance-quick-status]');
+  marcandoRapido = true;
+  try {
+    const fecha = app.querySelector('[data-attendance-date]');
+    if (!fecha.reportValidity()) return;
+    const resultado = marcarAtencionRapida(mensual, familias, input.value, fecha.value);
+    mensual = resultado.datos;
+    input.disabled = true;
+    actualizarAtenciones();
+    await guardarMensual();
+    if (!input.isConnected) return;
+    status.textContent = resultado.yaAtendida
+      ? `La familia ${resultado.numero} ya estaba atendida. Se conserva su fecha.`
+      : `Familia ${resultado.numero} marcada como atendida.`;
+    input.value = '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch (error) {
+    status.textContent = error.message;
+    input.select();
+  } finally {
+    marcandoRapido = false;
+    input.disabled = false;
+    input.focus({ preventScroll: true });
+  }
+});
+app.addEventListener('mousedown', event => {
+  if (event.target.closest('[data-clear-field]')) event.preventDefault();
+});
+document.addEventListener('click', event => {
+  document.querySelectorAll('.month-picker[open]').forEach(picker => {
+    if (!picker.contains(event.target)) picker.open = false;
+  });
+});
+document.addEventListener('toggle', event => {
+  const picker = event.target;
+  if (!picker.matches('.month-picker[open]')) return;
+  picker.querySelector('[data-picker-year]').value = Number(mensual.mes.slice(0, 4));
+  picker.querySelectorAll('[data-pick-month]').forEach(button => {
+    button.setAttribute('aria-pressed', String(button.dataset.pickMonth === mensual.mes.slice(5)));
+  });
+}, true);
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const picker = event.target.closest('.month-picker[open]');
+  if (picker) {
+    picker.open = false;
+    picker.querySelector('summary').focus();
+    event.preventDefault();
+  }
+});
+document.addEventListener('click', event => {
+  const month = event.target.closest('[data-pick-month], [data-pick-current-month]');
+  if (month) {
+    const picker = month.closest('.month-picker');
+    const year = picker.querySelector('[data-picker-year]');
+    const currentMonth = month.hasAttribute('data-pick-current-month');
+    if (!currentMonth && (!year.reportValidity() || !year.value)) return;
+    const input = document.querySelector('[data-month-period]');
+    input.value = currentMonth ? todayISO().slice(0, 7) : `${year.value.padStart(4, '0')}-${month.dataset.pickMonth}`;
+    picker.open = false;
+    picker.querySelector('summary').focus();
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return;
+  }
+  const adjust = event.target.closest('[data-month-adjust]');
+  if (adjust) {
+    const input = app.querySelector(`[data-month-count="${adjust.dataset.monthTarget}"]`);
+    if (!input || adjust.disabled) return;
+    const current = Number(input.value) || 0;
+    const next = current + Number(adjust.dataset.monthAdjust);
+    if (!Number.isSafeInteger(next) || next < 0 || next > 9999) return;
+    input.value = String(next);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    return;
+  }
+  const button = event.target.closest('[data-clear-field]');
+  if (!button) return;
+  const input = button.closest('.clearable-field').querySelector('input');
+  if (input.readOnly || input.disabled) return;
+  input.focus();
+  input.value = '';
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+});
 app.addEventListener("click", handleActionClick);
 document.getElementById("sectionNavigation").addEventListener("click", handleActionClick);
 document.addEventListener('click', event => {
-  const legend = document.querySelector('.list-workspace-actions .status-legend');
-  if (legend?.open && !legend.contains(event.target)) legend.open = false;
+  document.querySelectorAll('.workflow-help[open], .count-settings[open], .month-history[open], .status-legend[open]').forEach(details => {
+    if (!details.contains(event.target)) details.open = false;
+  });
   const details = app.querySelector('#pendingActions');
   if (details?.open && !details.contains(event.target)) details.open = false;
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const details = document.querySelector('.workflow-help[open], .count-settings[open], .month-history[open], .status-legend[open], #pendingActions[open]');
+  if (!details) return;
+  details.open = false;
+  details.querySelector('summary').focus({ preventScroll: true });
+  event.preventDefault();
 });
 document.getElementById("duplicateAlert").addEventListener("click", event => {
   if (guardandoAlta) return;
@@ -1383,18 +2010,73 @@ document.getElementById('pageDown').addEventListener('click', () => window.scrol
 window.addEventListener('scroll', updatePageNav, { passive: true });
 window.addEventListener('resize', updatePageNav);
 window.addEventListener('beforeunload', event => {
-  if (!guardandoAlta && !listDrafts.size) return;
+  if (!guardandoAlta && !listDrafts.size && !mensualPendiente && !guardadosMensuales && !app.querySelector(camposMensualesInvalidos)) return;
   event.preventDefault();
   event.returnValue = '';
 });
 window.addEventListener("beforeprint", () => {
   if (vista !== "listado") return;
-  document.getElementById("listPrintTitle").textContent = `Listado de ${modoListado} · ${fmt(todayISO())}`;
+  document.getElementById("listPrintTitle").textContent = `Listado de beneficiarios · ${etiquetaTrimestre()}`;
   const estadoSeleccionado = filtrosRapidos.find(([id]) => id === filtroEstado)?.[1] ?? filtroEstado;
-  document.getElementById("listPrintFilters").textContent = [numeroFamilia && `Familia: ${numeroFamilia}`, busqueda && `Búsqueda: ${busqueda}`, filtroEstado && `Estado: ${estadoSeleccionado}`].filter(Boolean).join(" · ");
+  document.getElementById("listPrintFilters").textContent = [`Generado el ${fmt(todayISO())}`, numeroFamilia && `Familia: ${numeroFamilia}`, busqueda && `Búsqueda: ${busqueda}`, filtroEstado && `Estado: ${estadoSeleccionado}`].filter(Boolean).join(" · ");
 });
-app.addEventListener("input", async event => {
+document.addEventListener("input", async event => {
+  if (!event.target.closest("#app, #sectionNavigation")) return;
   const target = event.target;
+  if (target.hasAttribute('data-active-search')) {
+    busquedaAltas = target.value;
+    paginaAltasNumero = 1;
+    const inicio = target.selectionStart;
+    renderAltas();
+    const siguiente = app.querySelector('[data-active-search]');
+    siguiente.focus();
+    if (inicio !== null) siguiente.setSelectionRange(inicio, inicio);
+    return;
+  }
+  const borrador = target.closest('.clearable-field')?.querySelector('[data-clear-field]');
+  if (borrador) borrador.hidden = !target.value;
+  if (target.hasAttribute('data-attendance-search')) {
+    busquedaAtenciones = target.value;
+    actualizarAtenciones();
+    return;
+  }
+  if (target.hasAttribute('data-attendance-date')) return;
+  if (target.hasAttribute('data-picker-year')) {
+    target.closest('.month-picker').querySelectorAll('[data-pick-month]').forEach(button => {
+      button.setAttribute('aria-pressed', String(Number(target.value) === Number(mensual.mes.slice(0, 4)) && button.dataset.pickMonth === mensual.mes.slice(5)));
+    });
+    return;
+  }
+  const clearButton = target.closest('.clearable-field')?.querySelector('[data-clear-field]');
+  if (clearButton) clearButton.hidden = !target.value;
+  if (target.hasAttribute('data-month-count') || target.hasAttribute('data-month-entity')) {
+    if (target.hasAttribute('data-month-count') && (mensual.recuentoDesdeAtenciones || mensual.recuentoDesdeAltas)) return;
+    target.setCustomValidity('');
+    if (target.hasAttribute('data-month-count')) {
+      if (/^\d{5,}$/.test(target.value)) target.value = target.value.slice(0, 4);
+      const texto = target.value.trim();
+      const valor = texto === '' ? '' : Number(texto);
+      if (!target.validity.valid || !recuentoValido(valor)) {
+        target.setCustomValidity('Escribe un número entero mayor o igual que cero, o deja la casilla vacía.');
+        target.setAttribute('aria-invalid', 'true');
+        setSaveState('Revisa las casillas del resumen mensual.', 'pending');
+        return;
+      }
+      const [grupo, indice] = target.dataset.monthCount.split(':');
+      mensual[grupo][Number(indice)] = valor;
+      app.querySelectorAll(`[data-month-target="${grupo}:${indice}"]`).forEach(button => {
+        const delta = Number(button.dataset.monthAdjust);
+        button.disabled = delta < 0 ? valor === '' || valor <= 0 : valor !== '' && valor >= 9999;
+      });
+    } else {
+      if (!target.validity.valid) { target.setAttribute('aria-invalid', 'true'); return; }
+      mensual.entidad = target.value;
+    }
+    target.removeAttribute('aria-invalid');
+    actualizarTotalesMensuales();
+    try { await guardarMensual(); } catch (error) { reportError(error); }
+    return;
+  }
   if (target.hasAttribute('data-list-zoom')) {
     aplicarZoomListado(target.value);
     return;
@@ -1412,18 +2094,24 @@ app.addEventListener("input", async event => {
   target.removeAttribute("aria-invalid");
   if (target.hasAttribute('data-food-name') || target.hasAttribute('data-food-amount')) {
     const index = Number(target.dataset.foodName ?? target.dataset.foodAmount);
+    target.setCustomValidity('');
+    if (!target.validity.valid || (target.hasAttribute('data-food-amount') && target.value !== '' && !Number.isFinite(Number(target.value)))) {
+      target.setCustomValidity('Escribe una cantidad válida mayor o igual que cero.');
+      target.setAttribute('aria-invalid', 'true');
+      setSaveState('Revisa la cantidad del reparto.', 'pending');
+      return;
+    }
     if (target.hasAttribute('data-food-name')) reparto[index].nombre = target.value;
     else {
-      if (!target.validity.valid || (target.value !== '' && !Number.isFinite(Number(target.value)))) return;
       reparto[index].cantidad = target.value === '' ? '' : Number(target.value);
-      const r = resumen(familias), total = r.tamanos.reduce((n, c, i) => n + c * (i + 1), 0);
-      r.tamanos.forEach((n, j) => {
+      const r = resumenMensual(mensual), total = r.puedeRepartir ? r.personas : 0;
+      mensual.tamanos.forEach((n, j) => {
         const cell = app.querySelector(`[data-result="${index}:${j}"]`);
         if (cell) cell.textContent = envases(reparto[index].cantidad, j + 1, n, total) ?? '—';
       });
     }
     setSaveState('Guardando reparto…', 'saving');
-    try { await saveReparto(reparto); setSaveState('Reparto guardado.'); } catch (error) { reportError(error); }
+    try { await guardarMensual(); } catch (error) { reportError(error); }
     return;
   }
   if (target.hasAttribute("data-search") || target.hasAttribute("data-family-search")) { if (!listDrafts.size) filterTable(); return; }
@@ -1454,30 +2142,101 @@ app.addEventListener("input", async event => {
   try { await updatePerson(Number(target.dataset.index), target.dataset.field, target.value); }
   catch (error) { reportError(error); }
 });
-app.addEventListener("change", async event => {
+document.addEventListener("change", async event => {
+  if (!event.target.closest("#app, #sectionNavigation")) return;
   const target = event.target;
-  if (target.hasAttribute('data-list-minor')) {
+  if (target.hasAttribute('data-show-archived')) {
+    if (!await listoParaSalirListado()) { target.checked = !target.checked; return; }
+    verArchivadas = target.checked; renderListado(); return;
+  }
+  if (target.hasAttribute('data-list-month')) {
+    if (!target.reportValidity() || !mesValido(target.value) || !await listoParaSalirListado()) { target.value = mesListado; return; }
+    mesListado = target.value; render(); return;
+  }
+  if (target.hasAttribute('data-active-filter')) {
+    filtroAltas = target.value;
+    paginaAltasNumero = 1;
+    renderAltas();
+    app.querySelector('[data-active-filter]').focus({ preventScroll: true });
+    return;
+  }
+  if (target.hasAttribute('data-active-page')) {
+    if (guardandoAlta) { target.value = String(paginaAltasNumero); return; }
+    cambiarPaginaAltas(Number(target.value));
+    return;
+  }
+  if (target.hasAttribute('data-attendance-filter')) {
+    filtroAtenciones = target.value;
+    actualizarAtenciones();
+    return;
+  }
+  if (target.hasAttribute('data-attendance-date')) {
+    if (target.reportValidity()) fechaAtenciones = target.value;
+    return;
+  }
+  if (target.hasAttribute('data-attendance-row-date')) {
+    if (!target.reportValidity()) return;
+    try {
+      mensual = cambiarFechaAtencion(mensual, Number(target.dataset.attendanceRowDate), target.value);
+      actualizarAtenciones();
+      await guardarMensual();
+    } catch (error) { reportError(error); }
+    return;
+  }
+  if (target.hasAttribute('data-attendance-family')) {
+    const marcada = target.checked;
+    if (!mensual.recuentoDesdeAtenciones) { target.checked = !marcada; return; }
+    try {
+      const numero = Number(target.dataset.attendanceFamily);
+      if (marcada) {
+        const date = app.querySelector('[data-attendance-date]');
+        if (!date.value || !date.reportValidity()) { target.checked = false; date.focus(); return; }
+        fechaAtenciones = date.value;
+        const row = filasAtenciones(mensual, familias).find(f => f.numero === numero);
+        mensual = registrarAtencion(mensual, row?.familia, fechaAtenciones);
+      } else mensual = quitarAtencion(mensual, numero);
+    } catch (error) { target.checked = !marcada; alert(error.message); return; }
+    actualizarAtenciones();
+    try { await guardarMensual(); } catch (error) { reportError(error); }
+    return;
+  }
+  if (target.hasAttribute('data-month-period') || target.hasAttribute('data-month-history')) {
+    const mes = target.value;
+    if (!mes) {
+      target.value = mensual.mes;
+      return;
+    }
+    try { if (!await cambiarMes(mes)) target.value = mensual.mes; }
+    catch (error) { target.value = mensual.mes; reportError(error); }
+    return;
+  }
+  if (target.hasAttribute('data-list-minor') || target.hasAttribute('data-list-origin')) {
     const checked = target.checked;
     target.disabled = true;
     try {
       if (!await listoParaSalirListado()) { target.checked = !checked; return; }
       const original = familias.find(f => f.id === target.dataset.familyId);
-      const copia = editarPersona(original, target.dataset.personId, 'menor', checked);
+      const esOrigen = target.hasAttribute('data-list-origin');
+      const campo = esOrigen ? 'serviciosSociales' : 'menor';
+      const copia = editarPersona(original, target.dataset.personId, campo, esOrigen ? !checked : checked);
       const next = familias.map(f => f.id === copia.id ? copia : f);
-      setSaveState('Guardando la condición de menor…', 'saving');
+      guardandoAlta = true;
+      actualizarBotonesHistorial();
+      setSaveState('Guardando el cambio…', 'saving');
       await saveDB(next);
       familias = next;
+      historialCeldas.registrar(original, copia, { mes: todayISO().slice(0, 7), personaId: target.dataset.personId, campo });
       const tabla = document.getElementById('beneficiaryTable');
       const top = tabla.scrollTop, left = tabla.scrollLeft;
       renderListado();
       document.getElementById('beneficiaryTable').scrollTop = top;
       document.getElementById('beneficiaryTable').scrollLeft = left;
-      setSaveState('Condición de menor guardada.', 'saved');
+      setSaveState('Cambio guardado.', 'saved');
     } catch (error) {
       target.checked = !checked;
       setSaveState(error.message, 'pending');
       alert(error.message);
-    } finally { target.disabled = false; }
+    } finally { target.disabled = false; guardandoAlta = false; actualizarBotonesHistorial(); }
     return;
   }
   if (target.hasAttribute("data-list-field")) {
@@ -1496,6 +2255,13 @@ app.addEventListener("change", async event => {
     try { await changed(); renderFormulario(); const error = errorFormulario(); if (error) mostrarPendiente(error); } catch (error) { reportError(error); }
     return;
   }
+  if (target.hasAttribute('data-origin')) {
+    try {
+      await updatePerson(Number(target.dataset.index), 'serviciosSociales', !target.checked);
+      renderFormulario();
+    } catch (error) { reportError(error); }
+    return;
+  }
   if (target.hasAttribute("data-titular")) {
     try { await updateTitular(Number(target.dataset.index), target.checked); }
     catch (error) { reportError(error); }
@@ -1510,6 +2276,11 @@ app.addEventListener("change", async event => {
   try { await updatePerson(Number(target.dataset.index), target.dataset.field, target.value); }
   catch (error) { reportError(error); }
 });
+
+app.addEventListener('focusin', event => {
+  if (event.target.matches('[data-select-on-focus]')) event.target.select();
+});
+
 
 app.addEventListener("focusout", event => {
   const target = event.target;
@@ -1539,10 +2310,26 @@ app.addEventListener("focusout", event => {
 async function init() {
   try {
     familias = await loadDB();
+    let seguimientoNuevo = false;
+    familias = familias.map(f => { if (f.seguimiento) { validarSeguimiento(f.seguimiento); return f; } seguimientoNuevo = true; return iniciarSeguimiento(f, todayISO().slice(0, 7), 'migracion'); });
+    if (seguimientoNuevo) await guardarListadoDB(familias);
     try { ultimoInforme = await loadImportReport(); }
     catch (error) { console.error('No se pudo recuperar el informe de importación.', error); }
-    const savedReparto = await loadReparto();
-    reparto = prepararReparto(savedReparto);
+    mensuales = await loadMensuales();
+    const mesActual = todayISO().slice(0, 7);
+    const ultimoMes = Object.keys(mensuales).sort().at(-1);
+    mensual = mensuales[mesActual] ?? activarAltas(crearMensual(mesActual, mensuales[ultimoMes]?.entidad ?? '', mensuales[ultimoMes]?.reparto ?? null), familias);
+    if (mensual.recuentoDesdeAltas) mensual = actualizarAltas(mensual, familias);
+    reparto = mensual.reparto;
+    // Conserva una sola vez el reparto anterior en el mes de la integración.
+    // Los siguientes meses calculan las altas y dejan pendientes las cantidades.
+    if (!Object.keys(mensuales).length) {
+      const anterior = await loadReparto();
+      if (anterior !== null) {
+        reparto = mensual.reparto = prepararReparto(anterior);
+        await guardarMensual();
+      }
+    }
     if (normalizeTitulares(familias)) await saveDB(familias);
     await limpiarFilasVacias();
     render();

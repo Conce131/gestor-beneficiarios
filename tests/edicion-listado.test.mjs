@@ -52,7 +52,7 @@ test('deshacer recupera solo el miembro y conserva las ediciones posteriores de 
   const recuperada = restaurarMiembro(editada, familia.personas[1], 1);
   assert.equal(recuperada.personas.length, 2);
   assert.equal(recuperada.personas[0].nombre, 'Nombre actualizado');
-  assert.deepEqual(recuperada.personas[1], familia.personas[1]);
+  assert.deepEqual(recuperada.personas[1], { ...familia.personas[1], serviciosSociales: true, serviciosSocialesConfigurado: true });
   assert.equal(editada.personas.length, 1);
   assert.throws(() => restaurarMiembro(recuperada, familia.personas[1], 1), /ya está/);
 });

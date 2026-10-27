@@ -1,15 +1,26 @@
 import { erroresFamilia } from './validacion.mjs';
+import { errorProximaCita } from './vigencia.mjs';
 
 export function editarPersona(familia, personaId, campo, valor, hoy = new Date()) {
-  if (!['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita', 'menor'].includes(campo)) {
+  if (!['nombre', 'apellidos', 'documento', 'nacimiento', 'derivacion', 'vigencia', 'proximaCita', 'menor', 'serviciosSociales'].includes(campo)) {
     throw new Error('Este dato no se puede editar en el listado.');
   }
   const copia = structuredClone(familia);
   const persona = copia.personas.find(p => p.id === personaId);
   if (!persona) throw new Error('No se encontró la persona.');
   if (campo === 'menor' && persona.titular) throw new Error('El titular no puede marcarse como menor.');
+  if (campo === 'vigencia' && persona.serviciosSociales === false) throw new Error('Desmarca No para editar la vigencia original.');
+  if (campo === 'serviciosSociales' && !persona.titular) throw new Error('El origen de la derivación se indica en el titular.');
+  if (campo === 'serviciosSociales' && typeof valor !== 'boolean') throw new Error('El origen de la derivación debe ser Sí o No.');
   persona[campo] = valor;
-  if (campo === 'derivacion' || campo === 'vigencia') copia.personas.forEach(p => p[campo] = valor);
+  if (['derivacion', 'vigencia', 'serviciosSociales'].includes(campo)) copia.personas.forEach(p => {
+    p[campo] = valor;
+    if (campo === 'serviciosSociales') p.serviciosSocialesConfigurado = true;
+  });
+  if (campo === 'proximaCita') {
+    const mensaje = errorProximaCita(copia.personas.find(p => p.titular), valor, hoy);
+    if (mensaje) throw new Error(mensaje);
+  }
   if (campo === 'nacimiento') {
     const fecha = new Date(`${valor}T00:00:00`);
     let edad = hoy.getFullYear() - fecha.getFullYear();
@@ -39,9 +50,11 @@ export function restaurarMiembro(familia, persona, indice) {
   const titular = copia.personas.find(p => p.titular);
   if (!titular) throw new Error('La familia no tiene titular.');
   const restaurada = structuredClone(persona);
-  for (const campo of ['derivacion', 'vigencia']) {
-    if (titular[campo] !== undefined) restaurada[campo] = titular[campo];
+  for (const campo of ['derivacion', 'vigencia', 'serviciosSociales']) {
+    if (campo === 'serviciosSociales') restaurada[campo] = titular[campo] !== false;
+    else if (titular[campo] !== undefined) restaurada[campo] = titular[campo];
   }
+  restaurada.serviciosSocialesConfigurado = true;
   copia.personas.splice(Math.max(1, Math.min(indice, copia.personas.length)), 0, restaurada);
   return copia;
 }

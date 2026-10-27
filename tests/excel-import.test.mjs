@@ -35,6 +35,15 @@ test("importa familias y miembros desde la hoja Listado de la plantilla", () => 
   assert.equal(imported[1].personas[0].nacimiento, "1900-01-01");
   assert.equal(imported[1].personas[0].proximaCita, "2026-11-01");
   assert.notEqual(imported[0].id, families[0].id);
+  assert.equal(imported[0].personas[0].serviciosSociales, true);
+});
+
+test('mantiene las familias antiguas en Servicios Sociales al migrar a la nueva preferencia', () => {
+  const excel = buildWorkbook(template, [{ numero: 3, personas: [{
+    nombre: 'Ana', apellidos: 'Prueba', documento: 'ID-3', nacimiento: '1980-01-01',
+    derivacion: '2026-01-01', vigencia: '2027-01-01', titular: true,
+  }] }]);
+  assert.equal(importWorkbook(excel)[0].personas[0].serviciosSociales, true);
 });
 
 test('detecta y marca como menor a una persona importada por su fecha de nacimiento', () => {

@@ -5,12 +5,13 @@ import { coincideNumeroFamilia } from '../src/busqueda.mjs';
 test('Buscar familia 12 excluye 120 y 112', () => {
   assert.deepEqual([12, 120, 112].filter(n => coincideNumeroFamilia(n, '12')), [12]);
   assert.equal(coincideNumeroFamilia(120, '120'), true);
+  assert.deepEqual([12, 120, 112].filter(n => coincideNumeroFamilia(n, '#12')), [12]);
 });
 
 test('El filtro vacío incluye todas y acepta espacios y ceros iniciales', () => {
   assert.equal(coincideNumeroFamilia(12, ''), true);
   assert.equal(coincideNumeroFamilia(12, ' 012 '), true);
-  for (const consulta of ['12a', '1.2', '-12', '1e2']) {
+  for (const consulta of ['12a', '1.2', '-12', '1e2', '#', '##12']) {
     assert.equal(coincideNumeroFamilia(12, consulta), false);
   }
 });

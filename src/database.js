@@ -1,7 +1,8 @@
+import { openBrowserDatabase } from './browser-database.js';
 import { isTauri } from "@tauri-apps/api/core";
 import { load } from "@tauri-apps/plugin-store";
 
-const DB_NAME = "GestorBeneficiariosDB", DB_VERSION = 1, STORE = "familias";
+const STORE = "familias";
 let desktopStore;
 let desktopWriteQueue = Promise.resolve();
 
@@ -10,28 +11,27 @@ async function getDesktopStore(path = "familias.json") {
   return path === "familias.json" ? desktopStore : load(path, { autoSave: false });
 }
 
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE, { keyPath: "id" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
 
 async function saveBrowserDB(familias) {
-  const db = await openDB(), tx = db.transaction(STORE, "readwrite"), store = tx.objectStore(STORE);
-  store.clear();
-  familias.forEach(family => store.put(family));
+  const db = await openBrowserDatabase(), tx = db.transaction(STORE, "readwrite"), store = tx.objectStore(STORE);
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => { db.close(); resolve(); };
     tx.onerror = () => { db.close(); reject(tx.error); };
     tx.onabort = () => { db.close(); reject(tx.error); };
+    try {
+      store.clear();
+      familias.forEach(family => store.put(family));
+    } catch (error) {
+      // Un fallo síncrono de put no aborta la transacción por sí solo. Evita
+      // confirmar el clear y dejar un listado parcial o vacío.
+      tx.abort();
+      reject(error);
+    }
   });
 }
 
 async function loadBrowserDB() {
-  const db = await openDB();
+  const db = await openBrowserDatabase();
   return new Promise((resolve, reject) => {
     const request = db.transaction(STORE).objectStore(STORE).getAll();
     request.onsuccess = () => { db.close(); resolve(request.result || []); };
@@ -40,8 +40,8 @@ async function loadBrowserDB() {
 }
 
 export async function saveDB(familias) {
-  if (!isTauri()) return saveBrowserDB(familias);
   const snapshot = structuredClone(familias);
+  if (!isTauri()) return saveBrowserDB(snapshot);
   const write = desktopWriteQueue.then(async () => {
     const store = await getDesktopStore();
     const previous = await store.get("familias");
@@ -51,7 +51,13 @@ export async function saveDB(familias) {
       await recovery.save();
     }
     await store.set("familias", snapshot);
-    await store.save();
+    try { await store.save(); }
+    catch (error) {
+      // El plugin mantiene una caché incluso si falla la escritura en disco.
+      // Restáurala para no usar cambios fallidos como copia de recuperación.
+      await store.set('familias', previous ?? []);
+      throw error;
+    }
   });
   desktopWriteQueue = write.catch(() => {});
   return write;

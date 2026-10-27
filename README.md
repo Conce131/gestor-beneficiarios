@@ -1,5 +1,68 @@
 # Gestor de Beneficiarios para Entidades
 
+Versión actual: **0.9.0-beta.1**, en fase de pruebas y anterior a la primera versión estable.
+
+## Edición del listado
+
+En **Mensual → Familias de alta**, los botones **Lista / Cuadrícula** permiten
+elegir la presentación. La cuadrícula muestra tarjetas compactas con titular,
+documento, miembros, situación e inclusión en el recuento. Desde cada tarjeta se
+puede dar de alta/baja o abrir la familia en el listado trimestral. La vista
+elegida se recuerda en este navegador u ordenador cuando está disponible el
+almacenamiento de preferencias.
+
+Las tarjetas se organizan en páginas de 60 familias, ordenadas por número.
+La búsqueda y los filtros se aplican a todas las familias del periodo. Los
+totales mensuales conservan el recuento completo, con independencia de la página.
+
+Las familias se identifican como `#12` en pantalla; sus números siguen siendo
+numéricos en los datos y en Excel. La búsqueda del trimestral y de Familias de
+alta acepta tanto `12` como `#12`.
+
+La renovación se realiza cambiando las fechas de derivación y vigencia del
+titular. La documentación de menores no es obligatoria; la de adultos sí.
+
+`Ctrl+Z` y el botón **Deshacer** recuperan ediciones guardadas en las celdas del
+trimestral. `Ctrl+Mayús+Z`, `Ctrl+Y` y **Rehacer** vuelven a aplicarlas. En Mac se
+puede utilizar `⌘Z` y `⌘Mayús+Z`. Mientras escribes una casilla, se mantiene el
+deshacer de texto del navegador; `Escape` recupera su dato guardado.
+
+Se conservan hasta 100 ediciones durante la sesión, incluidas fechas compartidas,
+origen y condición de menor. El historial se reinicia al recargar, importar o
+añadir/borrar familias o miembros. Los borrados tienen su propio botón
+**Deshacer borrado**. Cada recuperación se guarda y actualiza el recuento
+automático, conservando las versiones de meses anteriores.
+
+## Reglas de vigencia y recuento
+
+La [guía de fórmulas y reglas del Excel y la app](GUIA-EXCEL-2.0.md) recoge las celdas, las fórmulas exactas, los motivos de exclusión, los avisos y las diferencias que conviene conocer.
+
+- La casilla «No» de la columna «Servicios sociales» se marca cuando la derivación no
+  procede de allí, y se aplica a la familia. En ese caso la vigencia utilizada es
+  la menor entre la vigencia indicada y la derivación más tres meses naturales.
+  Los tres meses son un máximo y nunca amplían una vigencia indicada anterior.
+  Si no se indica vigencia se usa ese máximo; se ajusta el último día de los meses cortos.
+- La vigencia manual se conserva: desmarcar recupera esa fecha, incluso después
+  de cerrar y abrir la aplicación. Marcar No muestra solo la fecha calculada y desmarcarlo recupera la original.
+  Cambiar la derivación recalcula el límite automático y la fecha aplicada.
+- El mensual cuenta las familias que continúan de alta y con vigencia válida al
+  cierre del mes, con margen de 90 días. El trimestral conserva la participación
+  anterior aunque después haya baja. Las bajas se archivan al cambiar de trimestre.
+- La próxima cita sirve para seguir la renovación y no condiciona el recuento.
+  Debe ser una fecha real, de hoy o futura, y puede ser anterior o igual al vencimiento.
+  Se mantiene el máximo de vigencia más 90 días y el aviso de cita pendiente o inválida.
+- La exportación utiliza `Modelo  listado v(2.0).xlsx` con las columnas de origen y vigencia
+  aplicada; contiene Listado y Resumen, sin Reparto, y conserva la vigencia manual al importar de nuevo. Se siguen aceptando los Excel de la plantilla anterior.
+- En el Excel, Servicios Sociales con Sí o vacío usa la vigencia manual; No activa
+  el máximo de tres meses sin ampliar una vigencia más corta. Se conservan las citas de todos los miembros y la marca de menor.
+  El reparto mensual está en un [Excel independiente](GUIA-RESUMEN-MENSUAL.md).
+  La pantalla Reparto usa las cifras del resumen mensual seleccionado.
+- En el trimestral, los rangos de edad usan años cumplidos: 0–2, 3–18 y 19–100, como la plantilla 2.0.
+- «Caducada» indica que venció la vigencia y aún no han pasado más de 90 días.
+  «Fuera de plazo» indica una cita no válida; «Fuera de recuento», más de 90 días desde
+  el vencimiento. La leyenda y el texto al pasar el ratón explican qué revisar. Las etiquetas
+  mantienen el mismo tamaño para que los cambios de estado no desplacen la tabla.
+
 ## Versión 1.2.3
 
 - Detecta menores automáticamente por fecha de nacimiento y los marca en el formulario.
@@ -569,13 +632,13 @@ El prototipo original y la plantilla Excel se conservan como referencias.
 El botón `Generar Excel` utiliza la plantilla incluida en el proyecto. La dependencia
 `fflate` se incluye en la compilación y no se descarga desde un CDN al exportar.
 Se rellenan las columnas A, B, C, D, E, F, H, I y L de Listado; G, J y K mantienen
-las fórmulas oficiales. Reparto, Resumen y el resto de las partes se conservan.
+las fórmulas oficiales. Resumen y el resto de las partes se conservan. El mensual se genera por separado.
 El archivo solicita recalcular sus fórmulas al abrirlo en Excel o LibreOffice.
 
 La exportación admite hasta 995 beneficiarios: a partir de K997 las fórmulas
 originales de miembros contienen referencias invertidas. Superar ese límite
-muestra un error y no descarga un listado incompleto. Reparto y la distribución
-de familias por tamaño en Resumen contemplan únicamente tamaños de 1 a 10.
+muestra un error y no descarga un listado incompleto. La distribución por tamaño
+y el modelo mensual contemplan únicamente familias de 1 a 10 miembros.
 Las fechas exportadas deben ser válidas y del año 1900 o posterior.
 La ampliación de rangos y la revisión de fórmulas quedan para un paso posterior.
 
@@ -668,39 +731,53 @@ a trabajar en el otro equipo; no existe sincronización ni mezcla automática de
 Al generar el Excel desde Tauri, la aplicación pide dónde guardarlo y luego lo abre
 con el programa asociado a los archivos `.xlsx` del ordenador (por ejemplo, Excel o
 LibreOffice). En el navegador, el archivo se descarga con el nombre
-`Listado_Reparto_Entidad.xlsx` en la carpeta de descargas configurada.
+`Listado_Trimestral_Entidad.xlsx` en la carpeta de descargas configurada.
 
-## Vistas de Listado, Resumen y Reparto
+## Trimestral y Mensual
 
-El listado abre en Personas, con una fila por beneficiario y separación entre
-familias. Los nombres, apellidos, documentos y fechas se pueden corregir en la
-tabla; el cambio se valida y guarda al salir de la casilla (con Tab, Intro o un
-clic fuera). Las fechas de derivación y vigencia se comparten con toda la familia.
-Una corrección inválida permanece visible y bloquea el cambio de sección hasta
-corregirla o recuperar los datos anteriores con el botón del aviso o Escape.
-Las altas y el cambio de titular continúan en la ficha de familia; cada fila
-ofrece «Ver familia» y «Añadir persona».
+La navegación se organiza en dos secciones con sus subpáginas:
 
-Los números de familia son referencias estables a los expedientes físicos.
-Borrar una familia no renumera las demás. Una nueva familia recibe el menor
-número positivo libre, incluidos los números liberados por eliminaciones.
-La importación y exportación conservan los números del listado.
+- **Trimestral → Listado y Resumen del listado.** La columna Situación permite
+  indicar el alta o baja desde el mes seleccionado. Las familias de baja siguen
+  visibles durante su trimestre y pasan al histórico al comenzar el siguiente.
+  «Ver familias archivadas» permite recuperarlas. Los números siguen reservados.
+  El resumen conserva las familias vigentes en algún momento del trimestre.
+- **Mensual → Familias de alta, Resumen mensual y Reparto.** El mes representa
+  el cierre para prever alimentos del siguiente: se cuentan las familias que
+  continúan de alta y cumplen la vigencia, con margen de 90 días incluido.
+  Las edades se calculan al último día del mes. Los grupos son menores sin edad,
+  0–2, 3–17 y 18 o más; se admiten familias de 1–10 miembros para exportar.
 
-Listado permite alternar entre Familias y Personas, conservando la búsqueda.
-En Personas se muestran los datos individuales y se puede abrir la familia para editarla.
-Resumen es de consulta y muestra los totales, familias por tamaño y rangos de edad.
-Los límites por fecha de nacimiento reproducen las fórmulas COUNTIFS de la plantilla,
-que no coinciden exactamente con las etiquetas de edad del Excel; la pantalla lo explica.
+Los meses nuevos calculan automáticamente las altas, copian entidad y nombres de
+alimentos y dejan vacías las cantidades de reparto. Los meses anteriores conservan
+sus cifras y criterio hasta cambiarlos expresamente, con copia restaurable.
+La migración inicia el seguimiento desde el mes actual: no reconstruye situaciones
+anteriores desconocidas. Véase [la guía mensual](GUIA-RESUMEN-MENSUAL.md).
 
-Reparto permite editar los 16 alimentos y sus cantidades asignadas en envases.
-Se divide cada cantidad entre los beneficiarios de familias de 1 a 10 miembros,
-se multiplica por el tamaño y se redondea por familia como en la plantilla.
-Las familias mayores de 10 se muestran en Resumen, pero quedan fuera de Reparto.
-Las cantidades vacías cuentan como cero en el cálculo, igual que Excel.
-Los nombres y cantidades se guardan en `reparto.json` en Tauri (en localStorage
-cuando se abre en navegador) y se escriben solo en las celdas editables B15:C30
-al generar Excel. Las fórmulas se conservan. Al cargar un Excel se importan las
-familias de la hoja Listado; los datos de Reparto no se importan.
+El reparto es una herramienta opcional que utiliza las cifras del mes seleccionado.
+Se calcula cuando los totales por familias y edades coinciden y hay beneficiarios. Las cantidades se dividen por el total de personas,
+se multiplican por el tamaño familiar y se redondean. Se admiten hasta 16 filas.
+El redondeo puede producir un total distinto de la cantidad asignada.
+
+**Generar Excel mensual** utiliza `MODELO RESUMEN MENSUAL.xlsx` y genera
+`Resumen_Mensual_AAAA-MM.xlsx` con Resumen mensual y Reparto. Requiere el nombre
+de la entidad y totales coincidentes. Las casillas sin datos se dejan vacías. La exportación conserva estilos y protecciones, repara las
+referencias rotas de reparto del modelo recibido y adapta el control a los
+cuatro grupos de edad. Incluye resultados calculados y solicita recálculo al abrir.
+No modifica la plantilla original ni envía el documento automáticamente.
+
+Los meses se guardan en `mensuales.json` en escritorio. En el navegador, el
+listado, los meses, los repartos y el informe de importación comparten la base
+IndexedDB `GestorBeneficiariosDB`. Los datos de localStorage y de la antigua
+base auxiliar se trasladan automáticamente antes de retirar la copia antigua. El reparto de la versión anterior se conserva una sola vez en el
+mes actual al iniciar la integración; los recuentos anteriores se conservan.
+La importación del listado trimestral conserva todos los mensuales.
+La opción de eliminar todos los datos también borra los mensuales.
+
+El Excel mensual sirve como documento para enviar y conservar. Actualmente no
+se importa de nuevo en la app: el traslado de listados mediante Excel solo
+transporta las familias de Listado. Los borradores y el historial mensual
+permanecen en el ordenador o navegador donde se introdujeron.
 
 
 ## Versión 1.2.4 — revisión de escritorio (14/10/2026)
@@ -718,3 +795,36 @@ Instalador: `GestorBeneficiarios-1.2.4-Windows-setup.exe`. Se genera con
 cuando las herramientas y dependencias de compilación cruzada ya están instaladas.
 Las pruebas automatizadas no sustituyen la comprobación de instalación y descarga
 en Windows.
+
+
+## Versión 0.9.0-beta.1 — versión de pruebas (21/10/2026)
+
+La aplicación continúa en desarrollo. Se adopta una numeración anterior a 1.0
+para distinguir estas entregas de una versión estable. Las versiones 1.x anteriores
+se conservan en el historial como entregas de prueba.
+
+Esta beta integra los resúmenes y repartos mensuales, la plantilla trimestral 2.0,
+las mejoras de edición y búsqueda del listado y una sola base IndexedDB para todos
+los datos del navegador. En escritorio se mantienen los archivos locales y la
+copia de recuperación del listado. La versión de la aplicación y la de sus
+plantillas Excel se numeran de forma independiente.
+
+El instalador es `GestorBeneficiarios-0.9.0-beta.1-Windows-setup.exe` y se genera con:
+
+```sh
+npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc -- --offline
+```
+
+El instalador se entrega aparte y no se sube al repositorio. Deben comprobarse su
+instalación y ejecución en Windows antes de distribuirlo como versión estable.
+
+### Archivos para el repositorio
+
+Se incluyen código, pruebas, documentación, scripts de herramientas y los archivos
+de dependencias bloqueadas. Los Excel necesarios son `Modelo  listado v(2.0).xlsx`,
+`MODELO RESUMEN MENSUAL.xlsx` y `Modelo  listado v(1.4).xlsx` (pruebas de compatibilidad).
+Los scripts históricos de `tools/` pueden requerir plantillas intermedias locales.
+
+Se excluyen instaladores, paquetes ZIP, compilaciones, dependencias instaladas,
+Excel de trabajo o con datos introducidos, archivos temporales de Office y
+configuración privada. La carpeta `Ignorar carpeta/` queda fuera de Git.
